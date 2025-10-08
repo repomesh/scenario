@@ -3,6 +3,9 @@ import { GithubStars } from "./docs/components/GithubStars";
 import { LanguageSelectorPortal } from "./docs/components/LanguageSelectorPortal";
 import tailwindcss from "@tailwindcss/vite";
 
+const baseUrl = process.env.BASE_URL ?? "http://localhost:5173";
+const basePath = process.env.BASE_PATH ?? "";
+
 export default defineConfig({
   title: "Scenario",
   description: "Agent Testing Framework",
@@ -170,6 +173,10 @@ export default defineConfig({
           text: "The Vibe-Eval Loop",
           link: "/best-practices/the-vibe-eval-loop",
         },
+        {
+          text: "Domain-Driven TDD",
+          link: "/best-practices/domain-driven-tdd",
+        },
       ],
     },
     {
@@ -186,6 +193,10 @@ export default defineConfig({
         {
           text: "Mocks",
           link: "/testing-guides/mocks",
+        },
+        {
+          text: "Blackbox Testing",
+          link: "/testing-guides/blackbox-testing",
         },
         {
           text: "Multimodal",
@@ -208,6 +219,31 @@ export default defineConfig({
             },
           ],
         },
+        {
+          text: "Testing Remote Agents",
+          items: [
+            {
+              text: "Overview",
+              link: "/examples/testing-remote-agents",
+            },
+            {
+              text: "JSON Response",
+              link: "/examples/testing-remote-agents/json",
+            },
+            {
+              text: "Streaming",
+              link: "/examples/testing-remote-agents/streaming",
+            },
+            {
+              text: "Server-Sent Events (SSE)",
+              link: "/examples/testing-remote-agents/sse",
+            },
+            {
+              text: "Stateful (Thread ID)",
+              link: "/examples/testing-remote-agents/stateful",
+            },
+          ],
+        },
       ],
     },
     {
@@ -215,21 +251,17 @@ export default defineConfig({
       items: [
         {
           text: "Python",
-          link: `${process.env.BASE_URL ?? "http://localhost:5173"}${
-            process.env.BASE_PATH ?? ""
-          }/reference/python/scenario/index.html`,
+          link: `${baseUrl}${basePath}/reference/python/scenario/index.html`,
         },
         {
           text: "TypeScript",
-          link: `${process.env.BASE_URL ?? "http://localhost:5173"}${
-            process.env.BASE_PATH ?? ""
-          }/reference/javascript/scenario/index.html`,
+          link: `${baseUrl}${basePath}/reference/javascript/scenario/index.html`,
         },
       ],
     },
   ],
-  basePath: process.env.BASE_PATH,
-  baseUrl: process.env.BASE_URL,
+  basePath,
+  baseUrl,
   topNav: [
     {
       element: LanguageSelectorPortal(),
