@@ -38,6 +38,7 @@ export default withScenario(
       // Provides detailed information about agent interactions,
       // conversation flows, and test results
       reporters: ["default", new VitestReporter()],
+      watch: false,
     },
   })
 );
