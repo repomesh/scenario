@@ -20,5 +20,14 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["**/*.ts", "**/*.tsx", "scripts/generate-examples/index.js"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "scripts/generate-examples/index.js",
+    "**/*.mdx"
+  ],
+  "mdx": {
+    // Enable strict type checking in MDX files.
+    "checkMdx": true
+  }
 }

@@ -3,7 +3,6 @@ title: Testing Voice AI Agents - Audio Testing Guide
 description: Test voice-enabled AI agents with audio fixtures. Validate speech-to-text, text-to-speech, and conversational voice agents.
 ---
 
-import { RefLink } from "../../../components/RefLink";
 import { CustomCodeGroup, CodeTab } from "../../../components/CustomCodeGroup";
 import AudioToTextExample from "../../_generated/examples/multimodal-audio-to-text.test.mdx";
 import AudioToAudioExample from "../../_generated/examples/multimodal-audio-to-audio.test.mdx";
@@ -58,13 +57,16 @@ export OPENAI_API_KEY="sk-…"
 ## Code Walk-through
 
 <CustomCodeGroup>
-  <CodeTab title="audio ➜ text (typescript)">
+  <CodeTab title="audio ➜ text (typescript)" language="typescript">
     <AudioToTextExample />
   </CodeTab>
-  <CodeTab title="audio ➜ audio (typescript)">
+  <CodeTab title="audio ➜ audio (typescript)" language="typescript">
     <AudioToAudioExample />
   </CodeTab>
-  <CodeTab title="voice-to-voice conversation (typescript)">
+  <CodeTab
+    title="voice-to-voice conversation (typescript)"
+    language="typescript"
+  >
     <VoiceToVoiceExample />
   </CodeTab>
 </CustomCodeGroup>
