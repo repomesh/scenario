@@ -5,4 +5,5 @@ export default defineConfig({
   defaultModel: {
     model: openai("gpt-4.1"),
   },
+  headless: true,
 });

@@ -1,12 +1,12 @@
 import { generateText, CoreMessage, ToolSet, Tool, ToolChoice, tool } from "ai";
 import { z } from "zod/v4";
-import { AgentInput, JudgeAgentAdapter, AgentRole } from "../domain";
-import { TestingAgentConfig, FinishTestArgs } from "./types";
-import { criterionToParamName } from "./utils";
-import { getProjectConfig } from "../config";
-import { ScenarioResult } from "../domain/core/execution";
-import { mergeAndValidateConfig } from "../utils/config";
-import { Logger } from "../utils/logger";
+import { JudgeResult } from "./interfaces";
+import { getProjectConfig } from "../../config";
+import { AgentInput, JudgeAgentAdapter, AgentRole } from "../../domain";
+import { modelSchema } from "../../domain/core/schemas/model.schema";
+import { Logger } from "../../utils/logger";
+import { TestingAgentConfig, FinishTestArgs } from "../types";
+import { criterionToParamName } from "../utils";
 
 /**
  * Configuration for the judge agent.
@@ -106,7 +106,7 @@ class JudgeAgent extends JudgeAgentAdapter {
     this.role = AgentRole.JUDGE;
   }
 
-  async call(input: AgentInput) {
+  async call(input: AgentInput): Promise<JudgeResult | null> {
     const cfg = this.cfg;
 
     const systemPrompt =
@@ -121,11 +121,11 @@ class JudgeAgent extends JudgeAgentAdapter {
       input.scenarioState.currentTurn === input.scenarioConfig.maxTurns;
 
     const projectConfig = await getProjectConfig();
-    const mergedConfig = mergeAndValidateConfig(cfg, projectConfig);
-    if (!mergedConfig.model) {
-      throw new Error("Model is required for the judge agent");
-    }
-
+    // Merge the agent config with the project config and validate
+    const mergedConfig = modelSchema.parse({
+      ...projectConfig?.defaultModel,
+      ...cfg,
+    });
     const tools: ToolSet = {
       continue_test: buildContinueTestTool(),
       finish_test: buildFinishTestTool(cfg.criteria),
@@ -137,11 +137,10 @@ class JudgeAgent extends JudgeAgentAdapter {
     if (enforceJudgement && !hasCriteria) {
       return {
         success: false,
-        messages: [],
         reasoning: "JudgeAgent: No criteria was provided to be judged against",
         metCriteria: [],
         unmetCriteria: [],
-      } satisfies ScenarioResult;
+      };
     }
 
     const toolChoice: ToolChoice<typeof tools> =
@@ -180,34 +179,31 @@ class JudgeAgent extends JudgeAgentAdapter {
 
           return {
             success: verdict === "success",
-            messages: input.messages,
             reasoning,
             metCriteria,
             unmetCriteria,
-          } satisfies ScenarioResult;
+          };
         }
 
         case "continue_test":
-          return [];
+          return null;
 
         default:
           return {
             success: false,
-            messages: input.messages,
             reasoning: `JudgeAgent: Unknown tool call: ${toolCall.toolName}`,
             metCriteria: [],
             unmetCriteria: cfg.criteria,
-          } satisfies ScenarioResult;
+          };
       }
     }
 
     return {
       success: false,
-      messages: input.messages,
       reasoning: `JudgeAgent: No tool call found in LLM output`,
       metCriteria: [],
       unmetCriteria: cfg.criteria,
-    } satisfies ScenarioResult;
+    };
   }
 
   private async generateText(input: Parameters<typeof generateText>[0]) {

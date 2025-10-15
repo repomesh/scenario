@@ -17,13 +17,7 @@ const getCurrentWeather = tool<
     city: z.string().describe("The city to get the weather for."),
     date_range: z.string().describe("The date range to get the weather for."),
   }),
-  execute: async ({
-    city,
-    date_range,
-  }: {
-    city: string;
-    date_range: string;
-  }) => {
+  execute: async ({ city }: { city: string; date_range: string }) => {
     // Simulate weather
     const choices = ["sunny", "cloudy", "rainy", "snowy"];
     const temperature = Math.floor(Math.random() * 31);
@@ -41,7 +35,6 @@ const getAccomodation = tool({
       .describe("The weather in the city."),
   }),
   execute: async ({
-    city,
     weather,
   }: {
     city: string;
@@ -78,7 +71,7 @@ const getAccomodation = tool({
 const callTravelAgent = async (
   messages: ModelMessage[],
   responseMessages: ModelMessage[] = []
-) => {
+): Promise<ModelMessage[]> => {
   const tools = {
     get_current_weather: getCurrentWeather,
     get_accomodation: getAccomodation,
