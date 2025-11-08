@@ -34,7 +34,7 @@ importers:
         version: 4.1.10
       vocs:
         specifier: github:langwatch/vocs#build
-        version: https://codeload.github.com/langwatch/vocs/tar.gz/daccc360ea6dd8f763c5ff51d1bf1010c6bc52ff(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0)
+        version: https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0)
       zustand:
         specifier: ^5.0.8
         version: 5.0.8(@types/react@19.1.6)(react@19.1.0)(use-sync-external-store@1.5.0(react@19.1.0))
@@ -4587,8 +4587,8 @@ packages:
       yaml:
         optional: true
 
-  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/daccc360ea6dd8f763c5ff51d1bf1010c6bc52ff:
-    resolution: {tarball: https://codeload.github.com/langwatch/vocs/tar.gz/daccc360ea6dd8f763c5ff51d1bf1010c6bc52ff}
+  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2:
+    resolution: {tarball: https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2}
     version: 1.0.15
     engines: {node: '>=22'}
     hasBin: true
@@ -10177,7 +10177,7 @@ snapshots:
       lightningcss: 1.30.1
       yaml: 2.8.0
 
-  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/daccc360ea6dd8f763c5ff51d1bf1010c6bc52ff(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0):
+  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0):
     dependencies:
       '@floating-ui/react': 0.27.16(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@hono/node-server': 1.19.6(hono@4.10.4)
