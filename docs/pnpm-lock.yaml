@@ -34,7 +34,7 @@ importers:
         version: 4.1.10
       vocs:
         specifier: github:langwatch/vocs#build
-        version: https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0)
+        version: https://codeload.github.com/langwatch/vocs/tar.gz/6cc16d5787a2addda200cc2cc49c331550c42635(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0)
       zustand:
         specifier: ^5.0.8
         version: 5.0.8(@types/react@19.1.6)(react@19.1.0)(use-sync-external-store@1.5.0(react@19.1.0))
@@ -4587,8 +4587,8 @@ packages:
       yaml:
         optional: true
 
-  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2:
-    resolution: {tarball: https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2}
+  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/6cc16d5787a2addda200cc2cc49c331550c42635:
+    resolution: {tarball: https://codeload.github.com/langwatch/vocs/tar.gz/6cc16d5787a2addda200cc2cc49c331550c42635}
     version: 1.0.15
     engines: {node: '>=22'}
     hasBin: true
@@ -4772,7 +4772,7 @@ snapshots:
     dependencies:
       '@babel/core': 7.28.5
       '@babel/helper-module-imports': 7.27.1
-      '@babel/helper-validator-identifier': 7.27.1
+      '@babel/helper-validator-identifier': 7.28.5
       '@babel/traverse': 7.28.5
     transitivePeerDependencies:
       - supports-color
@@ -5072,8 +5072,8 @@ snapshots:
 
   '@jridgewell/remapping@2.3.5':
     dependencies:
-      '@jridgewell/gen-mapping': 0.3.8
-      '@jridgewell/trace-mapping': 0.3.25
+      '@jridgewell/gen-mapping': 0.3.13
+      '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -10177,7 +10177,7 @@ snapshots:
       lightningcss: 1.30.1
       yaml: 2.8.0
 
-  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/729b5eb689d55b814f634b97fda07b06cbd948b2(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0):
+  vocs@https://codeload.github.com/langwatch/vocs/tar.gz/6cc16d5787a2addda200cc2cc49c331550c42635(@types/node@22.15.30)(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(jiti@2.6.1)(lightningcss@1.30.1)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(rollup@4.41.1)(typescript@5.8.3)(yaml@2.8.0):
     dependencies:
       '@floating-ui/react': 0.27.16(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@hono/node-server': 1.19.6(hono@4.10.4)
@@ -10191,7 +10191,7 @@ snapshots:
       '@radix-ui/react-label': 2.1.8(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@radix-ui/react-navigation-menu': 1.2.14(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@radix-ui/react-popover': 1.1.15(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      '@radix-ui/react-tabs': 1.1.12(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      '@radix-ui/react-tabs': 1.1.13(@types/react-dom@19.1.6(@types/react@19.1.6))(@types/react@19.1.6)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@shikijs/rehype': 1.29.2
       '@shikijs/transformers': 1.29.2
       '@shikijs/twoslash': 1.29.2(typescript@5.8.3)
