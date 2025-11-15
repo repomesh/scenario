@@ -174,7 +174,7 @@ describe("Vegetarian Recipe Agent", () => {
 
     // 3. Assert the result
     expect(result.success).toBe(true);
-  });
+  }, 30_000); // 30 second test timeout
 });
 ```
 </div>

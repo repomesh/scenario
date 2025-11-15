@@ -267,7 +267,7 @@ describe("Customer Service Billing", () => {
         String(m.content).toLowerCase().includes("account")
       )
     ).toBe(true); // Should discuss account
-  });
+  }, 30_000); // 30 second test timeout
 });
 ```
 
