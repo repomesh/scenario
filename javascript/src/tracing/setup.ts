@@ -1,4 +1,5 @@
 import { setupObservability } from "langwatch/observability/node";
+import { judgeSpanCollector } from "../agents/judge/judge-span-collector";
 import { getEnv } from "../config";
 
 /**
@@ -12,4 +13,5 @@ export const observabilityHandle = setupObservability({
     apiKey: envConfig.LANGWATCH_API_KEY,
     endpoint: envConfig.LANGWATCH_ENDPOINT,
   },
+  spanProcessors: [judgeSpanCollector],
 });

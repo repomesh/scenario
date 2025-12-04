@@ -30,6 +30,9 @@ export default withScenario(
       cors: true,
     },
     test: {
+      // Retry failed tests to handle transient AI failures
+      retry: 3,
+
       // Extended timeout for AI model interactions
       // AI agents can take time to process and respond, especially with
       // complex prompts or when using slower models
