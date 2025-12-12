@@ -93,6 +93,10 @@ Integration with Testing Frameworks:
 For more examples and detailed documentation, visit: https://github.com/langwatch/scenario
 """
 
+# Setup logging and tracing infrastructure (side-effect imports)
+from .config import logging as _logging_config  # noqa: F401
+from . import _tracing  # noqa: F401
+
 # First import non-dependent modules
 from .types import ScenarioResult, AgentInput, AgentRole, AgentReturnTypes
 from .config import ScenarioConfig
