@@ -178,7 +178,7 @@ export default defineConfig({
       items: [
         {
           text: "What is Scenario?",
-          link: "/",
+          link: "/scenario",
         },
         {
           text: "Your First Scenario",
