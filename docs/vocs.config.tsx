@@ -42,8 +42,6 @@ export default defineConfig({
         />
 
         {/* Performance */}
-        <link rel="preconnect" href="https://langwatch.mintlify.app" />
-        <link rel="preconnect" href="https://api.github.com" />
         <link rel="dns-prefetch" href="https://www.googletagmanager.com" />
 
         {/* Mobile optimization */}
