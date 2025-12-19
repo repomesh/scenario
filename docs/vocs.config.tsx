@@ -256,6 +256,10 @@ export default defineConfig({
           link: "/agent-integration/google-adk",
         },
         {
+          text: "HTTPS Integration",
+          link: "/agent-integration/https",
+        },
+        {
           text: "Inngest AgentKit",
           link: "/agent-integration/agentkit",
         },
