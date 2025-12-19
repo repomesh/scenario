@@ -283,6 +283,10 @@ export default defineConfig({
           text: "Pydantic AI",
           link: "/agent-integration/pydantic-ai",
         },
+        {
+          text: "Vercel AI SDK",
+          link: "/agent-integration/vercel-ai",
+        },
       ],
     },
     {
