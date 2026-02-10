@@ -1,7 +1,7 @@
 import { createServer, Server } from "http";
 import { openai } from "@ai-sdk/openai";
 import scenario, { AgentRole, type AgentAdapter } from "@langwatch/scenario";
-import { generateText, CoreMessage } from "ai";
+import { generateText, ModelMessage } from "ai";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
 /**
@@ -15,7 +15,7 @@ let server: Server;
 let serverUrl: string;
 
 // Server-side conversation storage
-const conversations = new Map<string, CoreMessage[]>();
+const conversations = new Map<string, ModelMessage[]>();
 
 beforeAll(async () => {
   // Create stateful HTTP server
@@ -33,7 +33,7 @@ beforeAll(async () => {
           const history = conversations.get(threadId) || [];
 
           // Add user message to history
-          const userMessage: CoreMessage = {
+          const userMessage: ModelMessage = {
             role: "user",
             content: message,
           };
@@ -54,7 +54,7 @@ beforeAll(async () => {
           });
 
           // Add assistant response to history
-          const assistantMessage: CoreMessage = {
+          const assistantMessage: ModelMessage = {
             role: "assistant",
             content: result.text,
           };
