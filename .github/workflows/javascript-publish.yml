@@ -6,6 +6,10 @@ on:
   workflow_dispatch:
   workflow_call:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   publish:
     if: |
@@ -56,5 +60,5 @@ jobs:
           fi
 
       - name: Publish to npm
-        run: pnpm publish --no-git-checks --tag ${{ steps.disttag.outputs.tag }}
         working-directory: javascript
+        run: pnpm publish --provenance --access public --no-git-checks --tag ${{ steps.disttag.outputs.tag }}
