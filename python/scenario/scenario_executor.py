@@ -48,6 +48,7 @@ from .types import (
     AgentInput,
     AgentRole,
     ChatCompletionMessageParamWithTrace,
+    JudgmentRequest,
     ScenarioResult,
     ScriptStep,
 )
@@ -224,11 +225,22 @@ class ScenarioExecutor:
         self._pending_messages = {}
         self._total_start_time = time.time()
         self._agent_times = {}
+        self._checkpoint_results: List[dict] = []
 
         self._new_turn()
         self._state.current_turn = 0
 
         context_scenario.set(self)
+
+    @property
+    def _compiled_checkpoints(self) -> tuple[List[str], List[str]]:
+        """Compile all checkpoint results into aggregated passed/failed criteria."""
+        passed: List[str] = []
+        failed: List[str] = []
+        for cp in self._checkpoint_results:
+            passed.extend(cp["passed_criteria"])
+            failed.extend(cp["failed_criteria"])
+        return passed, failed
 
     def add_message(
         self, message: ChatCompletionMessageParam, from_agent_idx: Optional[int] = None
@@ -456,7 +468,7 @@ class ScenarioExecutor:
 
             self.reset()
 
-            for script_step in self.script:
+            for i, script_step in enumerate(self.script):
                 callable = script_step(self._state)
                 if isinstance(callable, Awaitable):
                     result = await callable
@@ -465,6 +477,10 @@ class ScenarioExecutor:
                 self._emit_message_snapshot_event(scenario_run_id)
 
                 if isinstance(result, ScenarioResult):
+                    # Merge any accumulated checkpoint criteria into the final result
+                    compiled_passed, _ = self._compiled_checkpoints
+                    result.passed_criteria = compiled_passed + result.passed_criteria
+
                     status = (
                         ScenarioRunFinishedEventStatus.SUCCESS
                         if result.success
@@ -473,14 +489,39 @@ class ScenarioExecutor:
                     self._emit_run_finished_event(scenario_run_id, result, status)
                     return result
 
-            result = self._reached_max_turns(
-                """Reached end of script without conclusion, add one of the following to the end of the script:
+            if self._checkpoint_results:
+                # All inline criteria checkpoints passed
+                compiled_passed, compiled_failed = self._compiled_checkpoints
+                agent_roles_agents_idx = [
+                    idx
+                    for idx, agent in enumerate(self.agents)
+                    if agent.role == AgentRole.AGENT
+                ]
+                agent_times = [
+                    self._agent_times[idx]
+                    for idx in agent_roles_agents_idx
+                    if idx in self._agent_times
+                ]
+                agent_time = sum(agent_times)
+
+                result = ScenarioResult(
+                    success=len(compiled_failed) == 0,
+                    messages=self._state.messages,
+                    reasoning="All inline criteria checkpoints passed",
+                    passed_criteria=compiled_passed,
+                    failed_criteria=compiled_failed,
+                    total_time=time.time() - self._total_start_time,
+                    agent_time=agent_time,
+                )
+            else:
+                result = self._reached_max_turns(
+                    """Reached end of script without conclusion, add one of the following to the end of the script:
 
 - `scenario.proceed()` to let the simulation continue to play out
 - `scenario.judge()` to force criteria judgement
 - `scenario.succeed()` or `scenario.fail()` to end the test with an explicit result
-                """
-            )
+                    """
+                )
 
             status = (
                 ScenarioRunFinishedEventStatus.SUCCESS
@@ -505,7 +546,7 @@ class ScenarioExecutor:
             raise  # Re-raise the exception after cleanup
 
     async def _call_agent(
-        self, idx: int, role: AgentRole, request_judgment: bool = False
+        self, idx: int, role: AgentRole, judgment_request: Optional[JudgmentRequest] = None
     ) -> Union[List[ChatCompletionMessageParam], ScenarioResult, None]:
         agent = self.agents[idx]
 
@@ -564,7 +605,7 @@ class ScenarioExecutor:
                                     self._state.messages,
                                 ),
                                 new_messages=self._pending_messages.get(idx, []),
-                                judgment_request=request_judgment,
+                                judgment_request=judgment_request,
                                 scenario_state=self._state,
                             )
                         )
@@ -645,10 +686,12 @@ class ScenarioExecutor:
         await self._script_call_agent(AgentRole.AGENT, content)
 
     async def judge(
-        self, content: Optional[Union[str, ChatCompletionMessageParam]] = None
+        self,
+        criteria: Optional[List[str]] = None,
     ) -> Optional[ScenarioResult]:
         return await self._script_call_agent(
-            AgentRole.JUDGE, content, request_judgment=True
+            AgentRole.JUDGE,
+            judgment_request=JudgmentRequest(criteria=criteria),
         )
 
     async def proceed(
@@ -716,7 +759,7 @@ class ScenarioExecutor:
         self,
         role: AgentRole,
         content: Optional[Union[str, ChatCompletionMessageParam]] = None,
-        request_judgment: bool = False,
+        judgment_request: Optional[JudgmentRequest] = None,
     ) -> Optional[ScenarioResult]:
         self._consume_until_role(role)
         idx, next_agent = self._next_agent_for_role(role)
@@ -763,10 +806,31 @@ class ScenarioExecutor:
             return
 
         result = await self._call_agent(
-            idx, role=role, request_judgment=request_judgment
+            idx, role=role, judgment_request=judgment_request
         )
+
         if isinstance(result, ScenarioResult):
-            return result
+            if judgment_request is not None and judgment_request.criteria is not None:
+                # Checkpoint: record result
+                self._checkpoint_results.append({
+                    "passed_criteria": result.passed_criteria,
+                    "failed_criteria": result.failed_criteria,
+                })
+
+                if result.success:
+                    # Checkpoint passed: continue script
+                    return None
+                else:
+                    # Checkpoint failed: compile all results into the failing result
+                    compiled_passed, compiled_failed = self._compiled_checkpoints
+                    result.passed_criteria = compiled_passed
+                    result.failed_criteria = compiled_failed
+                    return result
+            else:
+                # Merge any prior checkpoint criteria into the final result
+                compiled_passed, _ = self._compiled_checkpoints
+                result.passed_criteria = compiled_passed + result.passed_criteria
+                return result
 
     # Event handling methods
 

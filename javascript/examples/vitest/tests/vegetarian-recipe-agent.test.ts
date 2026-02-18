@@ -33,7 +33,19 @@ describe("Vegetarian Recipe Agent", () => {
       agents: [
         agent,
         scenario.userSimulatorAgent(),
-        scenario.judgeAgent({
+        scenario.judgeAgent(),
+      ],
+      script: [
+        scenario.user(),
+        scenario.agent(),
+        scenario.judge({
+          criteria: [
+            "Agent either asks a relevant follow-up question or starts providing a recipe",
+          ],
+        }),
+        scenario.user(),
+        scenario.agent(),
+        scenario.judge({
           criteria: [
             "Agent should not ask more than two follow-up questions",
             "Agent should generate a recipe",
@@ -42,15 +54,6 @@ describe("Vegetarian Recipe Agent", () => {
             "Recipe should be vegetarian and not include any sort of meat",
           ],
         }),
-      ],
-      script: [
-        scenario.user(),
-        scenario.agent(),
-        scenario.user(),
-        scenario.agent(),
-        scenario.user(),
-        scenario.agent(),
-        scenario.judge(),
       ],
       setId: "javascript-examples",
     });

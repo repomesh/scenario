@@ -253,6 +253,11 @@ class JudgeAgent(AgentAdapter):
         """
 
         scenario = input.scenario_state
+        effective_criteria = (
+            input.judgment_request.criteria
+            if input.judgment_request and input.judgment_request.criteria is not None
+            else self.criteria
+        )
 
         # Build transcript and traces digest
         transcript = JudgeUtils.build_transcript_from_messages(input.messages)
@@ -270,7 +275,7 @@ class JudgeAgent(AgentAdapter):
 """
 
         criteria_str = "\n".join(
-            [f"{idx + 1}. {criterion}" for idx, criterion in enumerate(self.criteria)]
+            [f"{idx + 1}. {criterion}" for idx, criterion in enumerate(effective_criteria)]
         )
 
         messages = [
@@ -330,7 +335,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
                 "_",
                 criterion.replace(" ", "_").replace("'", "").lower(),
             )[:70]
-            for criterion in self.criteria
+            for criterion in effective_criteria
         ]
         tools = [
             {
@@ -364,7 +369,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
                                         "enum": ["true", "false", "inconclusive"],
                                         "description": criterion,
                                     }
-                                    for idx, criterion in enumerate(self.criteria)
+                                    for idx, criterion in enumerate(effective_criteria)
                                 },
                                 "required": criteria_names,
                                 "additionalProperties": False,
@@ -387,8 +392,8 @@ if you don't have enough information to make a verdict, say inconclusive with ma
             },
         ]
 
-        enforce_judgment = input.judgment_request
-        has_criteria = len(self.criteria) > 0
+        enforce_judgment = input.judgment_request is not None
+        has_criteria = len(effective_criteria) > 0
 
         if enforce_judgment and not has_criteria:
             return ScenarioResult(
@@ -432,16 +437,16 @@ if you don't have enough information to make a verdict, say inconclusive with ma
                         args = json.loads(tool_call.function.arguments)
                         verdict = args.get("verdict", "inconclusive")
                         reasoning = args.get("reasoning", "No reasoning provided")
-                        criteria = args.get("criteria", {})
+                        criteria_verdicts = args.get("criteria", {})
 
                         passed_criteria = [
-                            self.criteria[idx]
-                            for idx, criterion in enumerate(criteria.values())
+                            effective_criteria[idx]
+                            for idx, criterion in enumerate(criteria_verdicts.values())
                             if criterion == "true"
                         ]
                         failed_criteria = [
-                            self.criteria[idx]
-                            for idx, criterion in enumerate(criteria.values())
+                            effective_criteria[idx]
+                            for idx, criterion in enumerate(criteria_verdicts.values())
                             if criterion == "false" or criterion == "inconclusive"
                         ]
 

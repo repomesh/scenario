@@ -61,20 +61,23 @@ async def test_vegetarian_recipe_agent():
         agents=[
             RecipeAgent(),
             scenario.UserSimulatorAgent(),
-            scenario.JudgeAgent(criteria=[
+            scenario.JudgeAgent(),
+        ],
+        script=[
+            scenario.user("quick recipe for dinner"),
+            scenario.agent(),
+            scenario.judge(criteria=[
+                "Agent either asks a relevant follow-up question or starts providing a recipe",
+            ]),
+            scenario.user(),
+            scenario.agent(),
+            scenario.judge(criteria=[
                 "Agent should not ask more than two follow-up questions",
                 "Agent should generate a recipe",
                 "Recipe should include a list of ingredients",
                 "Recipe should include step-by-step cooking instructions",
                 "Recipe should be vegetarian and not include any sort of meat",
-            ])
-        ],
-        script=[
-            scenario.user("quick recipe for dinner"),
-            scenario.agent(),
-            scenario.user(),
-            scenario.agent(),
-            scenario.judge(),
+            ]),
         ],
     )
 
@@ -153,7 +156,19 @@ describe("Vegetarian Recipe Agent", () => {
       agents: [
         vegetarianRecipeAgent,
         scenario.userSimulatorAgent(),
-        scenario.judgeAgent({
+        scenario.judgeAgent(),
+      ],
+      script: [
+        scenario.user("quick recipe for dinner"),
+        scenario.agent(),
+        scenario.judge({
+          criteria: [
+            "Agent either asks a relevant follow-up question or starts providing a recipe",
+          ],
+        }),
+        scenario.user(),
+        scenario.agent(),
+        scenario.judge({
           criteria: [
             "Agent should not ask more than two follow-up questions",
             "Agent should generate a recipe",
@@ -162,13 +177,6 @@ describe("Vegetarian Recipe Agent", () => {
             "Recipe should be vegetarian and not include any sort of meat",
           ],
         }),
-      ],
-      script: [
-        scenario.user("quick recipe for dinner"),
-        scenario.agent(),
-        scenario.user(),
-        scenario.agent(),
-        scenario.judge(),
       ],
     });
 
@@ -219,7 +227,7 @@ _See your agent's conversations and decisions come to life:_
 <Button href="https://app.langwatch.ai/@project/simulations">
   Open the Simulations Visualizer
 </Button>
-<Button href="../visualizations">
+<Button href="/scenario/visualizations">
   Learn more about visualizing simulations
 </Button>
 

@@ -13,6 +13,7 @@ import {
   type ScenarioConfig,
   AgentRole,
   type AgentInput,
+  type JudgmentRequest,
   type ScriptStep,
   type AgentReturnTypes,
   type ScenarioExecutionLike,
@@ -168,6 +169,9 @@ export class ScenarioExecution implements ScenarioExecutionLike {
   /** Timestamp when execution started (for total time calculation) */
   private totalStartTime: number = 0;
 
+  /** Accumulated results from inline judge checkpoints */
+  private checkpointResults: { metCriteria: string[]; unmetCriteria: string[] }[] = [];
+
   /** Event stream for monitoring scenario progress */
   private eventSubject = new Subject<ScenarioEvent>();
 
@@ -244,7 +248,7 @@ export class ScenarioExecution implements ScenarioExecutionLike {
    */
   private setResult(
     result: Omit<ScenarioResult, "messages" | "totalTime" | "agentTime">
-  ): void {
+  ): ScenarioResult {
     const agentRoleAgentsIdx = this.agents
       .map((agent, i) => ({ agent, idx: i }))
       .filter(({ agent }) => agent.role === AgentRole.AGENT)
@@ -262,6 +266,8 @@ export class ScenarioExecution implements ScenarioExecutionLike {
       totalTime: this.totalTime,
       agentTime: totalAgentTime,
     };
+
+    return this._result;
 
     this.logger.debug(`[${this.config.id}] Result set`, {
       success: result.success,
@@ -335,6 +341,10 @@ export class ScenarioExecution implements ScenarioExecutionLike {
         await this.executeScriptStep(scriptStep, i);
 
         if (this.result) {
+          // Merge any accumulated checkpoint criteria into the final result
+          const cp = this.compiledCheckpoints;
+          this.result.metCriteria = [...cp.metCriteria, ...this.result.metCriteria];
+
           this.emitRunFinished({
             scenarioRunId,
             status: this.result.success
@@ -347,8 +357,27 @@ export class ScenarioExecution implements ScenarioExecutionLike {
         }
       }
 
+      if (this.checkpointResults.length > 0) {
+        // All inline criteria checkpoints passed
+        const cp = this.compiledCheckpoints;
+        const result = this.setResult({
+          success: cp.unmetCriteria.length === 0,
+          reasoning: "All inline criteria checkpoints passed",
+          metCriteria: cp.metCriteria,
+          unmetCriteria: cp.unmetCriteria,
+        });
+
+        this.emitRunFinished({
+          scenarioRunId,
+          status: result.success ? ScenarioRunStatus.SUCCESS : ScenarioRunStatus.FAILED,
+          result,
+        });
+
+        return result;
+      }
+
       // If no conclusion reached, set max turns error
-      this.reachedMaxTurns(
+      const result = this.reachedMaxTurns(
         [
           "Reached end of script without conclusion, add one of the following to the end of the script:",
           "- `Scenario.proceed()` to let the simulation continue to play out",
@@ -357,13 +386,13 @@ export class ScenarioExecution implements ScenarioExecutionLike {
         ].join("\n")
       );
 
-      this.emitRunFinished({ scenarioRunId, status: ScenarioRunStatus.FAILED });
+      this.emitRunFinished({ scenarioRunId, status: ScenarioRunStatus.FAILED, result });
 
-      return this.result!;
+      return result;
     } catch (error) {
       const errorInfo = extractErrorInfo(error);
 
-      this.setResult({
+      const result = this.setResult({
         success: false,
         reasoning: `Scenario failed with error: ${errorInfo.message}`,
         metCriteria: [],
@@ -374,7 +403,7 @@ export class ScenarioExecution implements ScenarioExecutionLike {
       this.emitRunFinished({
         scenarioRunId,
         status: ScenarioRunStatus.ERROR,
-        result: this.result!,
+        result,
       });
 
       // Re-throw the error in case it was a vitest assertion error
@@ -498,7 +527,7 @@ export class ScenarioExecution implements ScenarioExecutionLike {
   private async callAgent(
     idx: number,
     role: AgentRole,
-    judgmentRequest: boolean = false
+    judgmentRequest?: JudgmentRequest
   ): Promise<void> {
     const agent = this.agents[idx];
     const agentName = agent.name ?? agent.constructor.name;
@@ -739,25 +768,26 @@ export class ScenarioExecution implements ScenarioExecutionLike {
    *
    * This method is part of the ScenarioExecutionLike interface used by script steps.
    *
-   * @param content - Optional message to pass to the judge agent for additional context
+   * @param options - Optional options with inline criteria to evaluate as a checkpoint.
    * @returns A promise that resolves with:
    *   - ScenarioResult if the judge makes a final decision, or
    *   - Null if the conversation should continue
    *
    * @example
    * ```typescript
-   * // Let judge evaluate current state
+   * // Let judge evaluate with its configured criteria
    * const result = await execution.judge();
-   * if (result) {
-   *   console.log(`Judge decided: ${result.success ? 'pass' : 'fail'}`);
-   * }
    *
-   * // Provide additional context to judge
-   * const result = await execution.judge("Please consider the user's satisfaction level");
+   * // Evaluate inline criteria as a checkpoint
+   * const result = await execution.judge({ criteria: ["Agent responded helpfully"] });
    * ```
    */
-  async judge(content?: string | ModelMessage): Promise<ScenarioResult | null> {
-    return await this.scriptCallAgent(AgentRole.JUDGE, content, true);
+  async judge(options?: { criteria?: string[] }): Promise<ScenarioResult | null> {
+    return await this.scriptCallAgent(
+      AgentRole.JUDGE,
+      undefined,
+      { criteria: options?.criteria }
+    );
   }
 
   /**
@@ -858,14 +888,13 @@ export class ScenarioExecution implements ScenarioExecutionLike {
    * ```
    */
   async succeed(reasoning?: string): Promise<ScenarioResult> {
-    this.setResult({
+    return this.setResult({
       success: true,
       reasoning:
         reasoning || "Scenario marked as successful with Scenario.succeed()",
       metCriteria: [],
       unmetCriteria: [],
     });
-    return this.result!;
   }
 
   /**
@@ -892,13 +921,12 @@ export class ScenarioExecution implements ScenarioExecutionLike {
    * ```
    */
   async fail(reasoning?: string): Promise<ScenarioResult> {
-    this.setResult({
+    return this.setResult({
       success: false,
       reasoning: reasoning || "Scenario marked as failed with Scenario.fail()",
       metCriteria: [],
       unmetCriteria: [],
     });
-    return this.result!;
   }
 
   /**
@@ -948,18 +976,16 @@ export class ScenarioExecution implements ScenarioExecutionLike {
   private async scriptCallAgent(
     role: AgentRole,
     content?: string | ModelMessage,
-    judgmentRequest: boolean = false
+    judgmentRequest?: JudgmentRequest
   ): Promise<ScenarioResult | null> {
     this.logger.debug(`[${this.config.id}] scriptCallAgent`, {
       role,
       hasContent: content !== undefined,
-      judgmentRequest,
+      judgmentRequest: judgmentRequest != null,
+      hasInlineCriteria: judgmentRequest?.criteria != null,
     });
 
     this.consumeUntilRole(role);
-
-    let index = -1;
-    let agent: AgentAdapter | null = null;
 
     let nextAgent = this.getNextAgentForRole(role);
     if (!nextAgent) {
@@ -996,8 +1022,8 @@ export class ScenarioExecution implements ScenarioExecutionLike {
       );
     }
 
-    index = nextAgent.index;
-    agent = nextAgent.agent;
+    const index = nextAgent.index;
+    const agent = nextAgent.agent;
 
     this.removePendingAgent(agent);
 
@@ -1017,7 +1043,32 @@ export class ScenarioExecution implements ScenarioExecutionLike {
 
     await this.callAgent(index, role, judgmentRequest);
 
-    // The result may have been set by callAgent if the agent made a decision
+    // Handle inline criteria checkpoint semantics
+    if (this.result && judgmentRequest?.criteria != null) {
+      this.checkpointResults.push({
+        metCriteria: this.result.metCriteria,
+        unmetCriteria: this.result.unmetCriteria,
+      });
+
+      if (this.result.success) {
+        // Checkpoint passed: clear result, continue script
+        this._result = undefined;
+        return null;
+      } else {
+        // Checkpoint failed: compile all results into the failing result
+        const cp = this.compiledCheckpoints;
+        this.result.metCriteria = cp.metCriteria;
+        this.result.unmetCriteria = cp.unmetCriteria;
+        return this.result;
+      }
+    }
+
+    // Merge any prior checkpoint criteria into the final result
+    if (this.result) {
+      const cp = this.compiledCheckpoints;
+      this.result.metCriteria = [...cp.metCriteria, ...this.result.metCriteria];
+    }
+
     return this.result ?? null;
   }
 
@@ -1054,11 +1105,23 @@ export class ScenarioExecution implements ScenarioExecutionLike {
     this.totalStartTime = Date.now();
     this.pendingMessages.clear();
     this._result = undefined;
+    this.checkpointResults = [];
 
     this.logger.debug(`[${this.config.id}] Reset complete`, {
       threadId: this.state.threadId,
       agentCount: this.agents.length,
     });
+  }
+
+  /** Compiles all accumulated checkpoint results into aggregated met/unmet criteria. */
+  private get compiledCheckpoints(): { metCriteria: string[]; unmetCriteria: string[] } {
+    const metCriteria: string[] = [];
+    const unmetCriteria: string[] = [];
+    for (const cp of this.checkpointResults) {
+      metCriteria.push(...cp.metCriteria);
+      unmetCriteria.push(...cp.unmetCriteria);
+    }
+    return { metCriteria, unmetCriteria };
   }
 
   private nextAgentForRole(role: AgentRole): {
@@ -1179,8 +1242,8 @@ export class ScenarioExecution implements ScenarioExecutionLike {
    *
    * @param errorMessage - Optional custom error message to use instead of the default
    */
-  private reachedMaxTurns(errorMessage?: string): void {
-    this.setResult({
+  private reachedMaxTurns(errorMessage?: string): ScenarioResult {
+    return this.setResult({
       success: false,
       reasoning:
         errorMessage ||
@@ -1191,6 +1254,7 @@ export class ScenarioExecution implements ScenarioExecutionLike {
       unmetCriteria: this.getJudgeAgent()?.criteria ?? [],
     });
   }
+
 
   private getJudgeAgent(): JudgeAgentAdapter | null {
     return (
