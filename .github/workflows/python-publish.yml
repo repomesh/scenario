@@ -5,7 +5,6 @@ on:
     types:
       - published
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
@@ -14,8 +13,7 @@ jobs:
   publish:
     if: |
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'python/')) ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_call')
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
