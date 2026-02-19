@@ -18,6 +18,10 @@ import scenario, {
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { wrapJudgeForAudioTranscription } from "./helpers/wrap-judge-for-audio-transcription";
 import { AudioUtils } from "./utils/audio/audio.utils";
+import {
+  RealtimeAudioPlayer,
+  hookTransportToPlayer,
+} from "./utils/audio/realtime-audio-player";
 import { createUserSimulatorSession } from "../../openai-realtime-demo/agents/realtime-user-simulator.agent";
 import { createScenarioExpertSession } from "../../openai-realtime-demo/agents/scenario-expert.agent";
 
@@ -27,26 +31,31 @@ describe("Scenario Expert Agent (Realtime API)", () => {
   // Used for simulating a user in voice conversations with the Realtime agent
   let audioUserSim: RealtimeAgentAdapter;
   const collectedAudio: AudioResponseEvent[] = [];
+  // Real-time audio player — streams conversation audio as it arrives
+  const audioPlayer = new RealtimeAudioPlayer();
+  // Keep references to sessions so we can hook into their transport layer
+  let agentSession: ReturnType<typeof createScenarioExpertSession>;
+  let userSimSession: ReturnType<typeof createUserSimulatorSession>;
 
   beforeAll(async () => {
     // Create and connect the session - SAME as browser client pattern
-    const session = createScenarioExpertSession();
+    agentSession = createScenarioExpertSession();
 
     // Wrap connected session in adapter for Scenario testing
     realtimeAdapter = new RealtimeAgentAdapter({
       role: AgentRole.AGENT,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      session: session as any,
+      session: agentSession as any,
       agentName: "Scenario Expert",
       responseTimeout: 30000,
     });
 
-    const userSimulatorSession = createUserSimulatorSession();
+    userSimSession = createUserSimulatorSession();
     // Create user simulator (creates its own session internally)
     audioUserSim = new RealtimeAgentAdapter({
       role: AgentRole.USER,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      session: userSimulatorSession as any,
+      session: userSimSession as any,
       agentName: "Realtime User Simulator",
       responseTimeout: 30000,
     });
@@ -62,11 +71,24 @@ describe("Scenario Expert Agent (Realtime API)", () => {
       collectedAudio.push(event);
     });
 
-    // Connect user simulator (adapter handles connection)
+    // Connect both sessions (adapter handles connection)
     await Promise.all([realtimeAdapter.connect(), audioUserSim.connect()]);
+
+    // Start real-time audio player and hook into both transports
+    // to stream audio chunks as they arrive from each speaker
+    audioPlayer.start();
+    hookTransportToPlayer(agentSession as any, audioPlayer, "Scenario Expert");
+    hookTransportToPlayer(
+      userSimSession as any,
+      audioPlayer,
+      "Realtime User Simulator"
+    );
   }, 60000); // Longer timeout for connection
 
   afterAll(async () => {
+    // Wait for real-time audio playback to finish before tearing down
+    await audioPlayer.stop();
+
     // Cleanup connection
     await Promise.all([
       realtimeAdapter.disconnect(),
@@ -83,7 +105,7 @@ describe("Scenario Expert Agent (Realtime API)", () => {
     } catch (error) {
       console.error("Failed to save test audio:", error);
     }
-  });
+  }, 30000); // Longer timeout to allow audio playback to drain
 
   it("should handle voice-to-voice conversation about Scenario framework", async () => {
     const result = await scenario.run({
