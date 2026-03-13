@@ -25,6 +25,7 @@ export class ScenarioExecutionState implements ScenarioExecutionStateLike {
   private _messages: (ModelMessage & { id: string; traceId?: string })[] = [];
   private _currentTurn: number = 0;
   private _threadId: string = "";
+  private _onRollback?: (removedSet: Set<object>) => void;
 
   /** Event stream for message additions */
   private eventSubject = new Subject<StateChangeEvent>();
@@ -139,5 +140,45 @@ export class ScenarioExecutionState implements ScenarioExecutionStateLike {
           (part) => part.type === "tool-result" && part.toolName === toolName
         )
     );
+  }
+
+  /**
+   * Register a callback that fires when messages are rolled back.
+   * The executor uses this to clean up its pending message queues.
+   */
+  setOnRollback(handler: (removedSet: Set<object>) => void): void {
+    this._onRollback = handler;
+  }
+
+  /**
+   * Remove all messages from position `index` onward.
+   *
+   * Truncates the internal message list and notifies the executor
+   * (via the registered rollback handler) to clean pending queues.
+   *
+   * **Note:** This method is safe to call only during an agent's `call()`
+   * invocation.  The executor runs agents sequentially, so no other agent
+   * can observe stale `newMessages` references.  Calling this from outside
+   * that flow may leave already-delivered `newMessages` out of sync.
+   *
+   * @param index - Truncate point (clamped to `[0, messages.length]`).
+   *   Messages at positions >= index are removed.
+   * @returns The removed messages (empty array if nothing to remove).
+   * @throws {RangeError} If `index` is negative.
+   */
+  rollbackMessagesTo(index: number): ModelMessage[] {
+    if (index < 0) {
+      throw new RangeError(
+        `rollbackMessagesTo: index must be >= 0, got ${index}`
+      );
+    }
+    // Clamp to message length — rolling back past the end is a no-op.
+    const clamped = Math.min(index, this._messages.length);
+
+    const removed = this._messages.splice(clamped);
+    if (this._onRollback && removed.length > 0) {
+      this._onRollback(new Set<object>(removed));
+    }
+    return removed;
   }
 }

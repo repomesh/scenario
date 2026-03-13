@@ -226,6 +226,17 @@ export class ScenarioExecution implements ScenarioExecutionLike {
     this.state = new ScenarioExecutionState(this.config);
     this.preAssignedRunId = runId;
 
+    // Wire up rollback handler so the state can clean pending queues
+    this.state.setOnRollback((removedSet: Set<object>) => {
+      this.pendingMessages.forEach((queue, idx) => {
+        this.pendingMessages.set(
+          idx,
+          queue.filter((m: ModelMessage) => !removedSet.has(m))
+        );
+      });
+      this.logger.debug(`[${this.config.id}] rollbackMessagesTo removed ${removedSet.size} message(s)`);
+    });
+
     this.reset();
   }
 
