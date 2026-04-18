@@ -5,7 +5,7 @@ description: Run scenarios on the caller's event loop with `scenario.arun`. The 
 
 import { Callout } from "vocs/components";
 
-# Async-Native Parallelism [When to prefer `scenario.arun`]
+# Async-Native Parallelism [When to prefer scenario.arun over the default threaded run]
 
 By default, `scenario.run(...)` executes each invocation in a dedicated worker thread with its own `asyncio` event loop. That means **even synchronous adapters parallelise effortlessly** — no event loop plumbing on your side, and scenarios finish faster because they don't wait for each other. See [Test Runner Integration](/basics/test-runner-integration) for the standard parallel pytest setup.
 
