@@ -1,13 +1,13 @@
 ---
-title: Async-Native Parallelism - Run Scenarios On The Caller's Event Loop
-description: Use `scenario.arun` when your codebase is async-first and holds async state across calls. The default `scenario.run` already parallelizes scenarios via a thread pool — including sync adapters — so reach for `arun` only when you genuinely need everything on a single event loop.
+title: Async-Native Parallelism - scenario.arun
+description: Run scenarios on the caller's event loop with `scenario.arun`. The default `scenario.run` already parallelises via a thread pool, so reach for `arun` only when your codebase is fully async-first.
 ---
 
 import { Callout } from "vocs/components";
 
-# Async-Native Parallelism [When to prefer `scenario.arun` over the threaded default]
+# Async-Native Parallelism [When to prefer `scenario.arun`]
 
-By default, `scenario.run(...)` executes each invocation in a dedicated worker thread with its own `asyncio` event loop. That means **even synchronous adapters parallelize effortlessly** — no event loop plumbing on your side, and scenarios finish faster because they don't wait for each other. See [Test Runner Integration](/basics/test-runner-integration) for the standard parallel pytest setup.
+By default, `scenario.run(...)` executes each invocation in a dedicated worker thread with its own `asyncio` event loop. That means **even synchronous adapters parallelise effortlessly** — no event loop plumbing on your side, and scenarios finish faster because they don't wait for each other. See [Test Runner Integration](/basics/test-runner-integration) for the standard parallel pytest setup.
 
 Reach for `scenario.arun(...)` only when the threaded model gets in your way — specifically, when your code is async-first and your adapter awaits on async state that can't move between event loops. In that case the worker thread's fresh loop raises:
 
@@ -16,8 +16,6 @@ RuntimeError: Task <...> got Future <...> attached to a different loop
 ```
 
 `scenario.arun` executes the scenario on the caller's event loop, so that state stays usable across concurrent runs.
-
----
 
 ## Which one should I use?
 
@@ -34,8 +32,6 @@ await scenario.arun(...)   # async-native
 
 The signature and return value are identical. Only the execution model differs.
 </Callout>
-
----
 
 ## Migration
 
@@ -56,8 +52,6 @@ result = await scenario.arun(
     agents=[my_adapter, scenario.UserSimulatorAgent(), scenario.JudgeAgent(criteria=[...])],
 )
 ```
-
----
 
 ## Running scenarios concurrently under `arun`
 
@@ -105,8 +99,6 @@ async def test_hungry_user():
 
 Sibling tests in the same `group` run concurrently on a single event loop.
 
----
-
 ## How it differs from `scenario.run`
 
 | Aspect | `scenario.run` | `scenario.arun` |
@@ -118,8 +110,6 @@ Sibling tests in the same `group` run concurrently on a single event loop.
 | Telemetry | Same spans, same cost rollup | Same spans, same cost rollup |
 
 Traces land in LangWatch identically either way. Only the execution model differs.
-
----
 
 ## Common pitfalls
 
