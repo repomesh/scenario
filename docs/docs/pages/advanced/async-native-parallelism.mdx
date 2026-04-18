@@ -1,0 +1,130 @@
+---
+title: Async-Native Parallelism - Run Scenarios On The Caller's Event Loop
+description: Use `scenario.arun` when your codebase is async-first and holds async state across calls. The default `scenario.run` already parallelizes scenarios via a thread pool — including sync adapters — so reach for `arun` only when you genuinely need everything on a single event loop.
+---
+
+import { Callout } from "vocs/components";
+
+# Async-Native Parallelism [When to prefer `scenario.arun` over the threaded default]
+
+By default, `scenario.run(...)` executes each invocation in a dedicated worker thread with its own `asyncio` event loop. That means **even synchronous adapters parallelize effortlessly** — no event loop plumbing on your side, and scenarios finish faster because they don't wait for each other. See [Test Runner Integration](/basics/test-runner-integration) for the standard parallel pytest setup.
+
+Reach for `scenario.arun(...)` only when the threaded model gets in your way — specifically, when your code is async-first and your adapter awaits on async state that can't move between event loops. In that case the worker thread's fresh loop raises:
+
+```
+RuntimeError: Task <...> got Future <...> attached to a different loop
+```
+
+`scenario.arun` executes the scenario on the caller's event loop, so that state stays usable across concurrent runs.
+
+---
+
+## Which one should I use?
+
+- **`scenario.run`** (default) — you have sync code, or async code without shared async state, and want parallelism for free. This is the right choice for most users.
+- **`scenario.arun`** — your stack is fully async-first and your adapter relies on async objects that must stay on one event loop. You're comfortable orchestrating concurrency yourself via `asyncio.gather` or `pytest-asyncio-concurrent`.
+
+<Callout type="info">
+Both live on the public module:
+
+```python
+await scenario.run(...)    # threaded (default)
+await scenario.arun(...)   # async-native
+```
+
+The signature and return value are identical. Only the execution model differs.
+</Callout>
+
+---
+
+## Migration
+
+Before:
+
+```python
+result = await scenario.run(
+    name="…",
+    agents=[my_adapter, scenario.UserSimulatorAgent(), scenario.JudgeAgent(criteria=[...])],
+)
+```
+
+After — only the call changes:
+
+```python
+result = await scenario.arun(
+    name="…",
+    agents=[my_adapter, scenario.UserSimulatorAgent(), scenario.JudgeAgent(criteria=[...])],
+)
+```
+
+---
+
+## Running scenarios concurrently under `arun`
+
+Parallelism is the caller's responsibility under `arun`. Two common patterns:
+
+### `asyncio.gather` for ad-hoc concurrency
+
+```python
+results = await asyncio.gather(
+    scenario.arun(name="s1", description="...", agents=[...]),
+    scenario.arun(name="s2", description="...", agents=[...]),
+    scenario.arun(name="s3", description="...", agents=[...]),
+)
+```
+
+All three scenarios run on the same event loop and share any singletons you built alongside them.
+
+### `pytest-asyncio-concurrent` for pytest-level fan-out
+
+```python
+import pytest
+import scenario
+
+@pytest.mark.asyncio_concurrent(group="recipe_agent")
+async def test_dinner_idea():
+    result = await scenario.arun(
+        name="dinner idea",
+        description="User is looking for a dinner idea",
+        agents=[RecipeAgent(), scenario.UserSimulatorAgent(), scenario.JudgeAgent(criteria=[
+            "Recipe includes ingredients and steps",
+        ])],
+    )
+    assert result.success
+
+
+@pytest.mark.asyncio_concurrent(group="recipe_agent")
+async def test_hungry_user():
+    result = await scenario.arun(
+        name="hungry user",
+        description="User is very hungry",
+        agents=[RecipeAgent(), scenario.UserSimulatorAgent(), scenario.JudgeAgent(criteria=[...])],
+    )
+    assert result.success
+```
+
+Sibling tests in the same `group` run concurrently on a single event loop.
+
+---
+
+## How it differs from `scenario.run`
+
+| Aspect | `scenario.run` | `scenario.arun` |
+|---|---|---|
+| Event loop | New loop in a worker thread | Caller's loop |
+| Sync blocking work in adapter | ✓ absorbed by the worker thread | ⚠ blocks the caller loop |
+| Async state bound to caller loop | ❌ broken across threads | ✓ preserved |
+| Parallelism model | Thread pool (automatic) | `asyncio.gather` / pytest-asyncio-concurrent (explicit) |
+| Telemetry | Same spans, same cost rollup | Same spans, same cost rollup |
+
+Traces land in LangWatch identically either way. Only the execution model differs.
+
+---
+
+## Common pitfalls
+
+**Blocking sync work in an async adapter.** `arun` runs your adapter on the caller's loop. If your adapter does `time.sleep(5)` or a sync driver call, it blocks every other concurrent scenario on the same loop. Wrap the blocking work in `asyncio.to_thread(...)` yourself, or stick with `scenario.run`.
+
+**Accidentally sharing mutable state across scenarios.** Concurrent scenarios on one loop means concurrent access to any module-level state your adapter touches. Either scope the state per-scenario instance or guard it with `asyncio.Lock`.
+
+**Mixing `scenario.run` and `scenario.arun` for the same suite.** They're both safe side-by-side, but pick one per test module so the parallelism model is predictable.
