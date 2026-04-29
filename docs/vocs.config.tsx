@@ -339,6 +339,14 @@ export default defineConfig({
               text: "Overview",
               link: "/advanced/red-teaming",
             },
+            {
+              text: "GOAT Strategy",
+              link: "/advanced/red-teaming/goat",
+            },
+            {
+              text: "Reports Dashboard",
+              link: "/advanced/red-teaming/report",
+            },
           ],
         },
       ],

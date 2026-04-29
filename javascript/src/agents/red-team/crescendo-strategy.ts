@@ -1,4 +1,4 @@
-import { RedTeamStrategy } from "./red-team-strategy";
+import { AttackerOutput, RedTeamStrategy } from "./red-team-strategy";
 
 interface Phase {
   start: number;
@@ -56,7 +56,16 @@ const PHASES: Phase[] = [
 ];
 
 export class CrescendoStrategy implements RedTeamStrategy {
-  getPhase(
+  phaseEnds(totalTurns: number): [number, number, number] {
+    const t = totalTurns;
+    return [
+      Math.max(1, Math.floor(0.20 * t)),
+      Math.max(1, Math.floor(0.45 * t)),
+      Math.max(1, Math.floor(0.75 * t)),
+    ];
+  }
+
+  private getPhase(
     currentTurn: number,
     totalTurns: number
   ): { name: string; instructions: string } {
@@ -73,6 +82,11 @@ export class CrescendoStrategy implements RedTeamStrategy {
 
   getPhaseName(currentTurn: number, totalTurns: number): string {
     return this.getPhase(currentTurn, totalTurns).name;
+  }
+
+  /** Crescendo doesn't ask the attacker for JSON — wrap raw as the reply. */
+  parseAttackerOutput(raw: string): AttackerOutput {
+    return { reply: raw, observation: "", strategy: "", parseFailed: false };
   }
 
   private phaseTurnRange(totalTurns: number, phaseName: string): string {
