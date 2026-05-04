@@ -14,7 +14,7 @@ overrides:
   rollup@>=4.0.0 <4.59.0: '>=4.59.0'
   trim-newlines@<4.0.1: '>=4.0.1'
   flatted@<3.4.2: '>=3.4.2'
-  liquidjs: '>=10.25.0'
+  liquidjs@<10.25.7: '>=10.25.7'
 
 importers:
 
@@ -6153,7 +6153,7 @@ snapshots:
       p-retry: 4.6.2
       uuid: 10.0.0
       zod: 3.25.76
-      zod-to-json-schema: 3.25.0(zod@3.25.76)
+      zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@opentelemetry/exporter-trace-otlp-proto'
@@ -10929,6 +10929,7 @@ snapshots:
   zod-to-json-schema@3.25.0(zod@3.25.76):
     dependencies:
       zod: 3.25.76
+    optional: true
 
   zod-to-json-schema@3.25.0(zod@4.1.13):
     dependencies:
@@ -10938,7 +10939,6 @@ snapshots:
   zod-to-json-schema@3.25.2(zod@3.25.76):
     dependencies:
       zod: 3.25.76
-    optional: true
 
   zod-validation-error@4.0.2(zod@4.1.13):
     dependencies:
