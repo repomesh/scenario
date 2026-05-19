@@ -1,0 +1,18 @@
+{
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "standard",
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false,
+  "reportIncompatibleMethodOverride": false,
+  "reportIncompatibleVariableOverride": false,
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    ".venv",
+    "build",
+    "dist",
+    "examples/frameworks",
+    "examples/voice/_pipecat_twilio_bot.py"
+  ]
+}

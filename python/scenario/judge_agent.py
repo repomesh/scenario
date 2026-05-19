@@ -26,6 +26,7 @@ from ._judge.estimate_tokens import estimate_tokens, DEFAULT_TOKEN_THRESHOLD
 from ._judge.trace_tools import expand_trace, grep_trace
 from ._tracing import judge_span_collector, JudgeSpanCollector
 from .types import AgentInput, AgentReturnTypes, AgentRole, ScenarioResult
+from .voice._transcribe import transcribe_segments
 
 
 logger = logging.getLogger("scenario")
@@ -243,6 +244,9 @@ class JudgeAgent(AgentAdapter):
         span_collector: Optional[JudgeSpanCollector] = None,
         token_threshold: int = DEFAULT_TOKEN_THRESHOLD,
         max_discovery_steps: int = 10,
+        include_audio: Optional[bool] = None,
+        include_timeline: Optional[bool] = None,
+        include_traces: Optional[bool] = None,
         **extra_params,
     ):
         """
@@ -309,6 +313,11 @@ class JudgeAgent(AgentAdapter):
         self._span_collector = span_collector or judge_span_collector
         self._token_threshold = token_threshold
         self._max_discovery_steps = max_discovery_steps
+        # Voice-aware judge behaviour (§4.3). None = auto-detect based on
+        # conversation content and judge model capabilities.
+        self.include_audio = include_audio
+        self.include_timeline = include_timeline
+        self.include_traces = include_traces
 
         if model:
             self.model = model
@@ -351,6 +360,55 @@ class JudgeAgent(AgentAdapter):
         if not hasattr(self, "model"):
             raise Exception(agent_not_configured_error_message("JudgeAgent"))
 
+    # --------------------------------------------- voice auto-detection (§4.3)
+    # Small single-purpose helpers; kept out of call() to preserve SRP.
+    _AUDIO_CAPABLE_MODEL_SUBSTRINGS = ("gpt-4o", "gemini-2.5", "gemini-2.0-flash")
+
+    def _model_supports_audio(self) -> bool:
+        m = (self.model or "").lower()
+        return any(s in m for s in self._AUDIO_CAPABLE_MODEL_SUBSTRINGS)
+
+    def effective_include_audio(self, conversation_has_audio: bool) -> bool:
+        """Resolve include_audio: explicit wins, otherwise auto from model capability."""
+        if self.include_audio is not None:
+            return self.include_audio and conversation_has_audio
+        return conversation_has_audio and self._model_supports_audio()
+
+    def effective_include_timeline(self, conversation_has_audio: bool) -> bool:
+        """Default timeline True for voice, False for text — unless explicitly set."""
+        if self.include_timeline is not None:
+            return self.include_timeline
+        return conversation_has_audio
+
+    def effective_include_traces(self, otel_configured: bool) -> bool:
+        if self.include_traces is not None:
+            return self.include_traces
+        return otel_configured
+
+    # --------------------------------------------- AC-15 helpers (§4.3 fallback)
+
+    @staticmethod
+    def _conversation_has_audio(messages: List[Any]) -> bool:
+        """Return True if any message content contains an audio part."""
+        for msg in messages:
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in ("input_audio", "audio"):
+                        return True
+        return False
+
+    @staticmethod
+    def _extract_recording(input: AgentInput) -> Any:
+        """Return the VoiceRecording from the executor, or None."""
+        scenario_state = getattr(input, "scenario_state", None)
+        if scenario_state is None:
+            return None
+        executor = getattr(scenario_state, "_executor", None)
+        if executor is None:
+            return None
+        return getattr(executor, "_voice_recording", None)
+
     @scenario_cache()
     async def call(
         self,
@@ -390,7 +448,18 @@ class JudgeAgent(AgentAdapter):
         )
 
         # Build transcript and traces digest
-        transcript = JudgeUtils.build_transcript_from_messages(input.messages)
+        # AC-15 (§4.3): when the judge model can't ingest audio, transcribe
+        # agent audio and substitute text so the judge can evaluate the content.
+        conversation_has_audio = self._conversation_has_audio(input.messages)
+        working_messages = input.messages
+        if conversation_has_audio and not self.effective_include_audio(conversation_has_audio):
+            recording = self._extract_recording(input)
+            if recording is not None:
+                await transcribe_segments(recording)
+                working_messages = _enrich_messages_with_transcripts(
+                    input.messages, recording
+                )
+        transcript = JudgeUtils.build_transcript_from_messages(working_messages)
         spans = self._span_collector.get_spans_for_thread(input.thread_id)
         digest, is_large_trace = self._build_trace_digest(spans)
 
@@ -937,3 +1006,110 @@ if you don't have enough information to make a verdict, say inconclusive with ma
         raise Exception(
             f"Invalid tool call from judge agent: {tool_call.function.name}"
         )
+
+
+# --------------------------------------------------------------------- #
+# AC-15 helper — module-level to keep JudgeAgent clean                  #
+# --------------------------------------------------------------------- #
+
+
+def _enrich_messages_with_transcripts(
+    messages: List[Any],
+    recording: Any,
+) -> List[Any]:
+    """
+    Add a transcript text part to each audio-only message (both user AND
+    agent), preserving the audio part so the judge still sees ``input_audio``
+    evidence in the message.
+
+    Why we don't REPLACE: criteria like "agent and user exchanged real audio
+    turns" need the audio block visible to the judge as proof the message
+    carried bytes, not just text. Replacing the content (the previous
+    behavior) made the message look text-only and the judge correctly
+    concluded "the assistant's turns are text-only" — which then failed
+    audio-presence criteria.
+
+    Strategy: insert a ``{"type": "text", "text": <transcript>}`` part at the
+    front of the content list, leaving the input_audio part in place.
+    ``_truncate_base64_media`` later collapses the base64 to a placeholder
+    so token cost stays bounded; what survives is the **shape** evidence
+    (the audio block) plus the readable transcript.
+
+    Returns a new list — does not mutate input.
+
+    Matching strategy: per-role ordinal — the Nth assistant audio-only
+    message maps to the Nth agent segment, and the Nth user audio-only
+    message maps to the Nth user segment (each in temporal order). This
+    role-scoped matching is important when scenarios interleave turns:
+    user/agent counts don't have to match.
+
+    If a segment has no transcript (STT failed / unavailable), the
+    corresponding message is left as-is so evaluation degrades gracefully.
+    """
+    # Gather transcripts per-role in temporal order. Both rails are
+    # transcribed by the same provider via ``transcribe_segments`` upstream;
+    # this loop just routes the resulting text into the matching message.
+    segments = getattr(recording, "segments", []) or []
+    sorted_segments = sorted(segments, key=lambda s: s.start_time)
+    agent_transcripts = [
+        s.transcript
+        for s in sorted_segments
+        if getattr(s, "speaker", None) == "agent" and s.transcript
+    ]
+    user_transcripts = [
+        s.transcript
+        for s in sorted_segments
+        if getattr(s, "speaker", None) == "user" and s.transcript
+    ]
+
+    enriched: List[Any] = []
+    agent_msg_idx = 0  # ordinal counter over assistant audio-only messages
+    user_msg_idx = 0  # ordinal counter over user audio-only messages
+
+    for msg in messages:
+        role = msg.get("role") if isinstance(msg, dict) else None
+        if role not in ("assistant", "user"):
+            enriched.append(msg)
+            continue
+
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            enriched.append(msg)
+            continue
+
+        # Check: does this message have audio but no text?
+        has_audio = any(
+            isinstance(p, dict) and p.get("type") in ("input_audio", "audio")
+            for p in content
+        )
+        has_text = any(
+            isinstance(p, dict) and p.get("type") == "text"
+            for p in content
+        )
+
+        if has_audio and not has_text:
+            if role == "assistant" and agent_msg_idx < len(agent_transcripts):
+                transcript_text = agent_transcripts[agent_msg_idx]
+                agent_msg_idx += 1
+                enriched.append({
+                    **msg,
+                    "content": [{"type": "text", "text": transcript_text}, *content],
+                })
+                continue
+            if role == "user" and user_msg_idx < len(user_transcripts):
+                transcript_text = user_transcripts[user_msg_idx]
+                user_msg_idx += 1
+                enriched.append({
+                    **msg,
+                    "content": [{"type": "text", "text": transcript_text}, *content],
+                })
+                continue
+            # No transcript available — consume the ordinal slot anyway so
+            # subsequent messages map to the right segment.
+            if role == "assistant":
+                agent_msg_idx += 1
+            else:
+                user_msg_idx += 1
+        enriched.append(msg)
+
+    return enriched

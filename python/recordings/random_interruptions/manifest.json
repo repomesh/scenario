@@ -1,0 +1,88 @@
+{
+  "generated_at": "2026-05-14T18:18:15.733497+00:00",
+  "duration": 50.97064720799972,
+  "segment_count": 4,
+  "segments": [
+    {
+      "idx": 0,
+      "file": "segments/00-agent-1667ms.wav",
+      "role": "agent",
+      "start_time": 1.6679779579990281,
+      "end_time": 2.2822202909992484,
+      "duration": 0.6142423330002202,
+      "transcript": "Hello, thank you for calling. How can I help you today?"
+    },
+    {
+      "idx": 1,
+      "file": "segments/01-user-37052ms.wav",
+      "role": "user",
+      "start_time": 37.052890124999976,
+      "end_time": 41.48344849999921,
+      "duration": 4.4305583749992365,
+      "transcript": "i can't log in, it says my account is locked"
+    },
+    {
+      "idx": 2,
+      "file": "segments/02-agent-48661ms.wav",
+      "role": "agent",
+      "start_time": 48.66164533299889,
+      "end_time": 49.31068187500023,
+      "duration": 0.6490365420013404,
+      "transcript": "I'm really sorry about that. An account lock usually happens after too many login attempts or a security check. Please try resetting your password, and if it's still locked, tell me whether you're getting a locked message on the login page or an email notice.",
+      "transcript_truncated": true
+    },
+    {
+      "idx": 3,
+      "file": "segments/03-user-48663ms.wav",
+      "role": "user",
+      "start_time": 48.66355579099945,
+      "end_time": 50.97064720799972,
+      "duration": 2.307091417000265,
+      "transcript": "unlock my account"
+    }
+  ],
+  "events": [
+    {
+      "time": 1.6679779579990281,
+      "type": "agent_start_speaking"
+    },
+    {
+      "time": 2.2822202909992484,
+      "type": "agent_stop_speaking"
+    },
+    {
+      "time": 37.052890124999976,
+      "type": "user_start_speaking"
+    },
+    {
+      "time": 41.48344849999921,
+      "type": "user_stop_speaking"
+    },
+    {
+      "time": 48.66164533299889,
+      "type": "agent_start_speaking",
+      "latency": 7.178196832999674
+    },
+    {
+      "time": 48.66194179099875,
+      "type": "user_interrupt",
+      "metadata": {
+        "adapter": "PipecatAgentAdapter",
+        "native": true,
+        "outcome": "fired_after_speech"
+      }
+    },
+    {
+      "time": 48.66355579099945,
+      "type": "user_start_speaking"
+    },
+    {
+      "time": 49.31068187500023,
+      "type": "agent_stop_speaking"
+    },
+    {
+      "time": 50.97064720799972,
+      "type": "user_stop_speaking"
+    }
+  ]
+}

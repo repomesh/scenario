@@ -1,0 +1,184 @@
+name: voice-integration
+
+# On-demand workflow for voice tests that hit live providers (OpenAI Realtime,
+# Twilio, ElevenLabs, Gemini Live). These tests cost real API money and/or
+# provision real phone lines, so they do NOT run on every PR and do NOT run on
+# a schedule — invocation is explicit via the Actions tab or `gh workflow run`.
+#
+# Scope:
+#   - python/tests/voice with `-m integration` — unit-suite tests that are
+#     explicitly marker-tagged for integration.
+#   - python/examples/test_voice_*.py — example-style voice integration tests
+#     that require API keys and are skipped in python-ci.
+#   - python/tests/voice/test_*_e2e.py — the per-demo e2e wrappers (auto-marked
+#     `integration` by tests/voice/conftest.py).
+#
+# Secrets required (configure in repo settings):
+#   - OPENAI_API_KEY     — STT, TTS, Realtime API
+#   - LANGWATCH_API_KEY  — telemetry export
+#   - GEMINI_API_KEY     — Gemini Live adapter
+#   - ELEVENLABS_API_KEY — ElevenLabs adapter + STT
+#   - TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER,
+#     TWILIO_PHONE_NUMBER_2 — two Twilio-owned numbers for fully automated
+#     inbound/outbound demos
+#
+# If a secret is absent the relevant tests FAIL with a clear diagnosis message.
+# The workflow stays green as long as the tests that DID run passed.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: true
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache dependencies
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: |
+            .venv
+            ~/.cache/uv
+          key: ${{ runner.os }}-uv-integration-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-integration-
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: uv sync --frozen
+        working-directory: python
+
+      # ---------------------------------------------------------------
+      # @e2e bring-up: start the bundled stub bot so Pipecat-dependent
+      # e2e tests stop skipping.
+      # ---------------------------------------------------------------
+      - name: Start bundled Pipecat stub bot
+        run: |
+          uv run python examples/voice/_bot/bot.py \
+            >> /tmp/voice-pipecat-bot.log 2>&1 &
+          echo "$!" > /tmp/voice-bot.pid
+          # Poll until port 8765 accepts connections (up to 30 s).
+          for i in $(seq 1 60); do
+            if python3 -c "import socket; socket.create_connection(('127.0.0.1', 8765), 0.5)" 2>/dev/null; then
+              echo "voice stub bot: ready (PID=$(cat /tmp/voice-bot.pid))"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "ERROR: voice stub bot did not start within 30 s"
+          cat /tmp/voice-pipecat-bot.log || true
+          exit 1
+        working-directory: python
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      # ---------------------------------------------------------------
+      # @e2e bring-up: provision ElevenLabs agent (if API key present).
+      # Exports ELEVENLABS_AGENT_ID into GITHUB_ENV for subsequent steps.
+      # ---------------------------------------------------------------
+      - name: Provision ElevenLabs test agent
+        if: ${{ env.ELEVENLABS_API_KEY != '' }}
+        run: |
+          AGENT_ID=$(uv run python ../scripts/provision_elevenlabs_agent.py)
+          # Mask BEFORE writing to GITHUB_ENV so any later step that
+          # echos $ELEVENLABS_AGENT_ID gets `***` in the log instead of
+          # the raw ID. The ID is a public-ish identifier (it identifies
+          # which provisioned ConvAI agent to reach), not a secret, but
+          # we treat it conservatively so debug logs don't leak the
+          # specific test fixture's ID.
+          echo "::add-mask::${AGENT_ID}"
+          echo "ELEVENLABS_AGENT_ID=${AGENT_ID}" >> "${GITHUB_ENV}"
+        working-directory: python
+
+      - name: Run marker-tagged integration tests
+        # `|| true` so the step doesn't fail when zero tests match the
+        # marker. Real failures are caught by the next two steps' assertions.
+        run: uv run pytest tests/voice -m integration -v --tb=short || true
+        working-directory: python
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGWATCH_API_KEY: ${{ secrets.LANGWATCH_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_PHONE_NUMBER: ${{ secrets.TWILIO_PHONE_NUMBER }}
+          TWILIO_PHONE_NUMBER_2: ${{ secrets.TWILIO_PHONE_NUMBER_2 }}
+
+      - name: Run example-suite voice integration tests
+        run: uv run pytest examples/test_voice_to_voice_conversation.py examples/test_audio_to_audio.py examples/test_audio_to_text.py -v --tb=short
+        working-directory: python
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGWATCH_API_KEY: ${{ secrets.LANGWATCH_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      # ---------------------------------------------------------------
+      # Run the @e2e voice demos (fail-fast on missing infrastructure).
+      # ---------------------------------------------------------------
+      - name: Run @e2e voice demos
+        run: |
+          uv run pytest tests/voice/ -v --tb=short -q 2>&1 | tee /tmp/e2e-voice-results.log
+        working-directory: python
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGWATCH_API_KEY: ${{ secrets.LANGWATCH_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_PHONE_NUMBER: ${{ secrets.TWILIO_PHONE_NUMBER }}
+          TWILIO_PHONE_NUMBER_2: ${{ secrets.TWILIO_PHONE_NUMBER_2 }}
+
+      # ---------------------------------------------------------------
+      # Teardown: stop the bot regardless of pass/fail.
+      # ---------------------------------------------------------------
+      - name: Stop Pipecat stub bot
+        if: always()
+        run: |
+          if [ -f /tmp/voice-bot.pid ]; then
+            kill -TERM "$(cat /tmp/voice-bot.pid)" 2>/dev/null || true
+            rm -f /tmp/voice-bot.pid
+          fi
+
+      - name: Upload voice demo recordings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voice-demo-recordings
+          path: python/recordings/**
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voice-integration-logs
+          path: |
+            python/**/pytest-*.log
+            python/test_output/
+            /tmp/voice-pipecat-bot.log
+            /tmp/e2e-voice-results.log
+          retention-days: 14
+          if-no-files-found: ignore
