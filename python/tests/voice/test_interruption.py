@@ -156,6 +156,7 @@ async def test_interrupt_after_words_works_when_streaming_supported():
     assert state._executor.user_calls == ["cut in"]
 
 
+
 def test_record_interrupt_user_segment_appends_segment_and_events():
     """Regression for #466 — interrupts must write a user segment, not just an event.
 

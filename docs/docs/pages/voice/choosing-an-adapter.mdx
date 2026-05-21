@@ -1,0 +1,34 @@
+---
+title: How to choose an adapter
+description: Quick decision guide to pick the right Scenario voice adapter for your use case.
+---
+
+# How to choose an adapter
+
+Every adapter wraps a different wire transport but exposes the same
+`scenario.run()` API. Pick by use case, then click through to the adapter page
+for the constructor, capabilities, gotchas, and a worked example.
+
+If you want to compare specifics side-by-side, see the
+[capability matrix](/voice/capability-matrix).
+
+## By use case
+
+| I want to… | Adapter |
+|---|---|
+| Test a Twilio IVR (phone, DTMF) | [Twilio](/voice/adapters/twilio) |
+| Test an OpenAI Realtime agent | [OpenAI Realtime](/voice/adapters/openai-realtime) |
+| Test a custom Pipecat bot | [Pipecat](/voice/adapters/pipecat) |
+| Use a branded ElevenLabs Convai agent | [ElevenLabs](/voice/adapters/elevenlabs) |
+| Test a Gemini Live agent | [Gemini Live](/voice/adapters/gemini-live) |
+| Test a LiveKit room agent (preview) | [LiveKit](/voice/adapters/livekit) [preview] |
+| Test a Vapi outbound dialer (preview) | [Vapi](/voice/adapters/vapi) [preview] |
+| Test a raw WebRTC datachannel agent (preview) | [WebRTC](/voice/adapters/webrtc) [preview] |
+| Plug in your own STT + LLM + TTS pipeline | [Composable](/voice/adapters/composable) |
+| Speak a custom WebSocket protocol | [WebSocket](/voice/adapters/websocket) |
+
+## What's next
+
+- [Capability matrix](/voice/capability-matrix) — per-adapter feature support, wire transports, and shipping status.
+- [Getting started](/voice/getting-started) — install, env vars, and your first runnable voice scenario.
+- [Voice agents proposal](https://github.com/langwatch/scenario/issues/350) — design rationale and full adapter API surface.
