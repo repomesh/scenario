@@ -151,7 +151,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- AC-1.6: Restricted-paths regex ---"
-EXPECTED_PATTERN='^(\.github/workflows/|docs/LOW_RISK_PULL_REQUESTS\.md$|(auth|security|migrations)/|.*/(auth|security|migrations)/)'
+EXPECTED_PATTERN='^(\.github/workflows/|\.github/LOW_RISK_PULL_REQUESTS\.md$|(auth|security|migrations)/|.*/(auth|security|migrations)/)'
 if grep -qF "$EXPECTED_PATTERN" "$WF"; then
   pass "AC-1.6 restricted pattern matches exactly"
 else
@@ -208,17 +208,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# AC-1.11: Legacy workflows still exist (not deleted)
+# AC-1.11: REMOVED — this check asserted approval-or-hotfix.yml and
+# low-risk-evaluation.yml still existed (PR #1 must not delete them). Both
+# workflows were intentionally deleted in PR #4 of the gate-swap sequence, so
+# the assertion is no longer meaningful on main. Mirrors the same removal in
+# specs/langwatch-pr-gate-pattern.feature (AC-1.11 coverage-map note).
 # ---------------------------------------------------------------------------
-echo ""
-echo "--- AC-1.11: Legacy workflows untouched ---"
-for f in "approval-or-hotfix.yml" "low-risk-evaluation.yml"; do
-  if [ -f "$REPO_ROOT/.github/workflows/$f" ]; then
-    pass "AC-1.11 $f still exists"
-  else
-    fail "AC-1.11 $f missing (should not have been deleted)"
-  fi
-done
 
 # ---------------------------------------------------------------------------
 # AC-1.12: No branch protection API calls in the new workflow
@@ -280,7 +275,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# AC-X3: LOW_RISK_OPENAI_API_KEY + policy path docs/ (not dev/docs/)
+# AC-X3: LOW_RISK_OPENAI_API_KEY + policy path .github/ (not dev/docs/ or docs/)
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- AC-X3: LOW_RISK_OPENAI_API_KEY + policy path ---"
@@ -290,10 +285,10 @@ else
   fail "AC-X3 LOW_RISK_OPENAI_API_KEY not found"
 fi
 
-if grep -q 'cat docs/LOW_RISK_PULL_REQUESTS.md' "$WF"; then
-  pass "AC-X3 policy path is docs/ (not dev/docs/)"
+if grep -q 'cat \.github/LOW_RISK_PULL_REQUESTS.md' "$WF"; then
+  pass "AC-X3 policy path is .github/ (canonical process-doc location)"
 else
-  fail "AC-X3 policy path wrong — expected 'cat docs/LOW_RISK_PULL_REQUESTS.md'"
+  fail "AC-X3 policy path wrong — expected 'cat .github/LOW_RISK_PULL_REQUESTS.md'"
 fi
 
 if grep -q 'dev/docs/' "$WF"; then
@@ -302,10 +297,16 @@ else
   pass "AC-X3 no stale dev/docs/ path"
 fi
 
-if grep -q 'github.com/langwatch/scenario/blob/main/docs/LOW_RISK_PULL_REQUESTS.md' "$WF"; then
-  pass "AC-X3 comment URL points to scenario repo"
+if grep -q 'cat docs/LOW_RISK_PULL_REQUESTS.md' "$WF"; then
+  fail "AC-X3 old docs/ path still present (file moved to .github/)"
 else
-  fail "AC-X3 comment URL does not point to scenario repo"
+  pass "AC-X3 no stale docs/ path"
+fi
+
+if grep -q 'github.com/langwatch/scenario/blob/main/\.github/LOW_RISK_PULL_REQUESTS.md' "$WF"; then
+  pass "AC-X3 comment URL points to scenario repo at .github/ path"
+else
+  fail "AC-X3 comment URL does not point to scenario repo at .github/ path"
 fi
 
 # ---------------------------------------------------------------------------

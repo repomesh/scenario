@@ -37,9 +37,9 @@ Feature: Adopt langwatch/langwatch PR gate pattern
 
   @unit
   Scenario: Policy content is untouched across the sequence
-    Given the file `docs/LOW_RISK_PULL_REQUESTS.md`
+    Given the file `.github/LOW_RISK_PULL_REQUESTS.md`
     When the diffs of PRs #1, #2, #3, and #4 are inspected
-    Then none of them modify `docs/LOW_RISK_PULL_REQUESTS.md`
+    Then none of them modify `.github/LOW_RISK_PULL_REQUESTS.md`
 
   @integration
   Scenario: Each PR in the sequence is independently revertable
@@ -116,7 +116,7 @@ Feature: Adopt langwatch/langwatch PR gate pattern
   Scenario: Restricted-paths regex matches the scenario-tuned path set
     Given the `RESTRICTED_PATTERN` constant in `pr-auto-approve.yml`
     When its regex is inspected
-    Then it equals `^(\.github/workflows/|docs/LOW_RISK_PULL_REQUESTS\.md$|(auth|security|migrations)/|.*/(auth|security|migrations)/)`
+    Then it equals `^(\.github/workflows/|\.github/LOW_RISK_PULL_REQUESTS\.md$|(auth|security|migrations)/|.*/(auth|security|migrations)/)`
     And it does not contain the segment `prisma/`
 
   @unit
@@ -148,12 +148,6 @@ Feature: Adopt langwatch/langwatch PR gate pattern
     When a user removes the `firefighting` label (`action == 'unlabeled' && label.name == 'firefighting'`)
     Then a separate `dismiss-firefighting-approval` job runs
     And that job dismisses the bot's firefighting APPROVE review matching by exact review body
-
-  @unit
-  Scenario: PR #1 does not modify the legacy approval workflows
-    Given the diff of PR #1
-    When `.github/workflows/approval-or-hotfix.yml` and `.github/workflows/low-risk-evaluation.yml` are inspected
-    Then neither file is modified, renamed, or deleted
 
   @unit
   Scenario: PR #1 does not modify branch protection on main
@@ -342,7 +336,7 @@ Feature: Adopt langwatch/langwatch PR gate pattern
   # AC-X1: "No re-actors/alls-green; inline jq aggregator" -> Scenario: No third-party alls-green action is introduced anywhere
   # AC-X2: "All actions pinned to commit SHAs" -> Scenario: All GitHub Action references in new or modified workflows are pinned to a full commit SHA
   # AC-X3: "Reuse LOW_RISK_OPENAI_API_KEY secret" -> Scenario: The existing OpenAI secret name is reused without rotation
-  # AC-X4: "No PR touches docs/LOW_RISK_PULL_REQUESTS.md" -> Scenario: Policy content is untouched across the sequence
+  # AC-X4: "No PR touches .github/LOW_RISK_PULL_REQUESTS.md" -> Scenario: Policy content is untouched across the sequence
   # AC-X5: "Each PR independently revertable" -> Scenario: Each PR in the sequence is independently revertable
   #
   # PR #1
@@ -356,7 +350,7 @@ Feature: Adopt langwatch/langwatch PR gate pattern
   # AC-1.8: "qualifies=true -> APPROVE + label + comment with reasoning verbatim" -> Scenario: Qualifying PR receives bot APPROVE, label, and comment with reasoning verbatim
   # AC-1.9: "qualifies=false -> remove label + comment + no review" -> Scenario: Non-qualifying PR has label removed, comment posted, and no review submitted
   # AC-1.10: "firefighting unlabeled -> dismiss-firefighting-approval job" -> Scenario: Removing the firefighting label dismisses the bot's firefighting approval
-  # AC-1.11: "approval-or-hotfix.yml + low-risk-evaluation.yml unchanged in PR #1" -> Scenario: PR #1 does not modify the legacy approval workflows
+  # AC-1.11: REMOVED — covered the diff of PR #1 not modifying approval-or-hotfix.yml + low-risk-evaluation.yml; both workflows were deleted in PR #4 so the assertion is no longer meaningful on main.
   # AC-1.12: "branch protection unchanged in PR #1" -> Scenario: PR #1 does not modify branch protection on main
   # AC-1.13: "concurrency group + cancel-in-progress" -> Scenario: PR #1 uses the expected concurrency keying
   # AC-1.14: "permissions: pull-requests write, contents read, no others" -> Scenario: PR #1 declares only the minimum required permissions
