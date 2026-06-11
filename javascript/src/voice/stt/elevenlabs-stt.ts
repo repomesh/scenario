@@ -2,7 +2,7 @@
  * ElevenLabs STT leaf — {@link ElevenLabsSTTProvider} (Scribe). Same
  * {@link STTProvider} contract as the OpenAI leaf, different backend.
  *
- * Uses the `scribe_v1` model via the `elevenlabs` SDK's
+ * Uses the `scribe_v1` model via the `@elevenlabs/elevenlabs-js` SDK's
  * `speechToText.convert`. PCM16/24 kHz audio is wrapped in a minimal WAV
  * container before posting (EL's endpoint expects a file payload, not raw
  * PCM). Only `text` crosses the {@link STTProvider} boundary — no
@@ -12,7 +12,7 @@
  * copy that used to live in `adapters/composable.ts` is gone; composable and
  * the branded preset import this leaf.
  */
-import { ElevenLabsClient } from "elevenlabs";
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 
 import { AudioChunk } from "../audio-chunk";
 import { ELEVENLABS_STT_MODEL } from "../voice-models";
@@ -56,7 +56,7 @@ export class ElevenLabsSTTProvider implements STTProvider {
     const blob = new Blob([new Uint8Array(wav)], { type: "audio/wav" });
     const response = await client.speechToText.convert({
       file: blob,
-      model_id: ELEVENLABS_STT_MODEL,
+      modelId: ELEVENLABS_STT_MODEL,
     });
     return response.text ?? "";
   }
