@@ -29,10 +29,12 @@ import base64
 import json
 import logging
 import os
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar, List, Optional, cast
+
+from openai.types.chat import ChatCompletionMessageParam
 
 from ...config.voice_models import OPENAI_REALTIME_MODEL, OPENAI_STT_MODEL
-from ...types import AgentRole
+from ...types import AgentInput, AgentReturnTypes, AgentRole
 from ..adapter import VoiceAgentAdapter
 from ..audio_chunk import AudioChunk
 from ..capabilities import AdapterCapabilities
@@ -497,6 +499,18 @@ class OpenAIRealtimeAgentAdapter(VoiceAgentAdapter):
                 # Response finished or was cancelled — mark it so the next
                 # drain re-entry returns an empty chunk (clean exit).
                 self._response_active = False
+                # Issue #646: a tool-only turn (function call, NO audio delta) would
+                # otherwise loop here to the deadline and raise — the accumulated tool
+                # call is parsed but never returned. When the response is done and at
+                # least one tool call has been finalized this turn, return an empty
+                # chunk so the drain exits cleanly and call() surfaces the tool_calls
+                # message. A genuinely empty turn (done + EMPTY accumulator) must still
+                # fall through to the timeout — the non-empty accumulator is the
+                # discriminator, NOT response.done alone.
+                # (Distinct from the drain-re-entry empty-chunk path above at the
+                # _response_ever_active guard, which handles a COMPLETED prior response.)
+                if self._completed_tool_calls:
+                    return AudioChunk(data=b"")
 
             elif etype == "conversation.item.input_audio_transcription.completed":
                 # User-side transcript from Whisper.
@@ -560,7 +574,7 @@ class OpenAIRealtimeAgentAdapter(VoiceAgentAdapter):
                     "OpenAIRealtimeAgentAdapter: ignoring event type %r", etype
                 )
 
-    async def call(self, input):  # type: ignore[override]
+    async def call(self, input: AgentInput) -> AgentReturnTypes:
         """Surface realtime tool calls alongside the spoken audio turn (#630).
 
         The base ``call()`` returns a single assistant audio message and does
@@ -592,12 +606,15 @@ class OpenAIRealtimeAgentAdapter(VoiceAgentAdapter):
 
         # One assistant message carrying ALL of this turn's tool calls — the
         # conventional OpenAI shape (one assistant turn, many tool_calls).
-        tool_call_message: dict[str, Any] = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": list(self._completed_tool_calls),
-        }
-        return [audio_message, tool_call_message]
+        tool_call_message: ChatCompletionMessageParam = cast(
+            ChatCompletionMessageParam,
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": list(self._completed_tool_calls),
+            },
+        )
+        return [cast(ChatCompletionMessageParam, audio_message), tool_call_message]
 
     async def _drain_agent_response(
         self, on_first_chunk=None
