@@ -631,6 +631,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
                 tool_choice=tool_choice,
                 spans=spans,
                 effective_criteria=effective_criteria,
+                input_messages=input.messages,
             )
 
         # Standard single-call path for small traces
@@ -649,7 +650,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
             ),
         )
 
-        return self._parse_response(response, effective_criteria, messages)
+        return self._parse_response(response, effective_criteria, messages, input_messages=input.messages)
 
     def _build_trace_digest(self, spans: Sequence[Any]) -> tuple[str, bool]:
         """
@@ -747,6 +748,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
         tool_choice: Any,
         spans: Sequence[Any],
         effective_criteria: List[str],
+        input_messages: Sequence[Any],
     ) -> AgentReturnTypes:
         """
         Runs the multi-step discovery loop for large traces.
@@ -801,7 +803,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
             message = cast(Choices, response.choices[0]).message
             if not message.tool_calls:
                 # No tool calls - try to parse as a response
-                return self._parse_response(response, effective_criteria, messages)
+                return self._parse_response(response, effective_criteria, messages, input_messages=input_messages)
 
             # Check for terminal tool call
             terminal_call = next(
@@ -809,7 +811,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
                 None,
             )
             if terminal_call:
-                return self._parse_response(response, effective_criteria, messages)
+                return self._parse_response(response, effective_criteria, messages, input_messages=input_messages)
 
             # Execute discovery tools and add results to messages
             # Add the assistant message with tool calls
@@ -842,6 +844,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
             messages=messages,
             tools=tools,
             effective_criteria=effective_criteria,
+            input_messages=input_messages,
         )
 
     def _force_verdict(
@@ -850,6 +853,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
         messages: List[dict],
         tools: List[dict],
         effective_criteria: List[str],
+        input_messages: Sequence[Any],
     ) -> AgentReturnTypes:
         """
         Makes one final LLM call with tool_choice forced to finish_test.
@@ -897,7 +901,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
             ),
         )
         return self._parse_response(
-            forced_response, effective_criteria, rewritten_messages
+            forced_response, effective_criteria, rewritten_messages, input_messages=input_messages
         )
 
     def _execute_discovery_tool(self, tool_call: Any, spans: Sequence[Any]) -> str:
@@ -931,6 +935,8 @@ if you don't have enough information to make a verdict, say inconclusive with ma
         response: Any,
         effective_criteria: List[str],
         messages: List[dict],
+        *,
+        input_messages: Sequence[Any],
     ) -> AgentReturnTypes:
         """
         Parses a litellm response into the appropriate return type.
@@ -940,7 +946,8 @@ if you don't have enough information to make a verdict, say inconclusive with ma
         Args:
             response: The litellm ModelResponse.
             effective_criteria: The criteria to evaluate against.
-            messages: The conversation messages (for inclusion in ScenarioResult).
+            messages: The judge's internal LLM messages (system prompt + transcript).
+            input_messages: The actual conversation messages to include in ScenarioResult.
 
         Returns:
             AgentReturnTypes: Either an empty list (continue) or ScenarioResult.
@@ -988,7 +995,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
 
                 return ScenarioResult(
                     success=verdict == "success" and len(failed_criteria) == 0,
-                    messages=cast(Any, messages),
+                    messages=cast(Any, input_messages),
                     reasoning=reasoning,
                     passed_criteria=passed_criteria,
                     failed_criteria=failed_criteria,
@@ -1005,7 +1012,7 @@ if you don't have enough information to make a verdict, say inconclusive with ma
             )
             return ScenarioResult(
                 success=False,
-                messages=cast(Any, messages),
+                messages=cast(Any, input_messages),
                 reasoning=(
                     "JudgeAgent: trace discovery did not converge on a "
                     "verdict within the step budget"
