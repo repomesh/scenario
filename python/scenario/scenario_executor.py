@@ -87,6 +87,27 @@ import langwatch.telemetry.context
 from langwatch.telemetry.tracing import LangWatchTrace
 
 
+def _extract_text_content(content: object) -> str:
+    """Extract a plain-text string from a message content value.
+
+    ``content`` may be a plain string or a list of content-part dicts
+    (e.g. ``[{"type": "text", "text": "hello"}, {"type": "image_url", ...}]``).
+    Passing a list directly to LangWatch's ``trace.update()`` produces a
+    Python repr string (``"[{'type': 'text', ...}]"``), which is unreadable.
+    This helper concatenates only the ``"text"`` parts so the trace value is
+    always a human-readable string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return str(content)
+
+
 class ScenarioExecutor:
     """
     Core orchestrator for scenario-based agent testing.
@@ -312,20 +333,19 @@ class ScenarioExecutor:
                 self._pending_messages[idx] = []
             self._pending_messages[idx].append(message)
 
-        # Update trace with input/output
+        # Update trace with input/output.
+        # Extract text from content (str or list of content parts) so we
+        # always pass a str to LangWatch — avoids Python repr of list objects.
         if message["role"] == "user":
-            self._trace.update(input={"type": "text", "value": str(message["content"])})
+            content = message["content"]
+            self._trace.update(input=_extract_text_content(content))
         elif message["role"] == "assistant":
-            self._trace.update(
-                output={
-                    "type": "text",
-                    "value": str(
-                        message["content"]
-                        if "content" in message
-                        else json.dumps(message, cls=SerializableWithStringFallback)
-                    ),
-                }
+            content = (
+                message["content"]
+                if "content" in message
+                else json.dumps(message, cls=SerializableWithStringFallback)
             )
+            self._trace.update(output=_extract_text_content(content))
 
     def rollback_messages_to(self, index: int) -> List[ChatCompletionMessageParam]:
         """Remove all messages from position `index` onward.
