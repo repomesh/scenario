@@ -1,10 +1,11 @@
+import json
 import pytest
 from typing import Any, cast
 from unittest.mock import patch, MagicMock, AsyncMock
 from openai import OpenAI
 from scenario import JudgeAgent
 from scenario.config import ModelConfig, ScenarioConfig
-from scenario.types import AgentInput, JudgmentRequest
+from scenario.types import AgentInput, JudgmentRequest, ScenarioResult
 from scenario.cache import context_scenario
 from scenario.scenario_executor import ScenarioExecutor
 from scenario.voice.modality_resolver import ModalityTier
@@ -404,6 +405,237 @@ async def test_judge_omits_additional_context_when_none():
     finally:
         context_scenario.reset(token)
         ScenarioConfig.default_config = None
+
+
+# --------------------------------------------------------------------------- #
+# Criteria-verdict parsing (issue #161 + follow-up): the judge must never      #
+# report success=True without an explicit "true" verdict for every criterion,  #
+# and must never crash on a malformed criteria payload.                        #
+# --------------------------------------------------------------------------- #
+
+
+async def _run_judge_finish_test(
+    criteria: list[str],
+    criteria_value: Any,
+    verdict: str = "success",
+    reasoning: str = "done",
+) -> ScenarioResult:
+    """Drive JudgeAgent through a finish_test tool call and return the result.
+
+    ``criteria_value`` is the *decoded* value of the ``criteria`` field as the
+    LLM would have produced it. Passing a ``str`` models the stringified-dict
+    bug (the LLM serialised the object as a JSON string); passing a ``list`` /
+    ``dict`` models a raw non-string payload. Building the arguments with
+    ``json.dumps`` avoids hand-escaping nested JSON.
+    """
+    ScenarioConfig.default_config = ScenarioConfig(default_model="openai/gpt-4")
+    judge = JudgeAgent(criteria=criteria)
+
+    mock_scenario_state = MagicMock()
+    mock_scenario_state.description = "Test scenario"
+    mock_scenario_state.current_turn = 1
+    mock_scenario_state.config.max_turns = 10
+
+    agent_input = AgentInput(
+        thread_id="test",
+        messages=[{"role": "user", "content": "Hello"}],
+        new_messages=[],
+        judgment_request=JudgmentRequest(),
+        scenario_state=mock_scenario_state,
+    )
+
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.tool_calls = [MagicMock()]
+    mock_response.choices[0].message.tool_calls[0].function.name = "finish_test"
+    mock_response.choices[0].message.tool_calls[0].function.arguments = json.dumps(
+        {"verdict": verdict, "reasoning": reasoning, "criteria": criteria_value}
+    )
+
+    mock_executor = MagicMock()
+    mock_executor.config = MagicMock()
+    mock_executor.config.cache_key = None
+    token = context_scenario.set(mock_executor)
+
+    try:
+        with patch(
+            "scenario.judge_agent.litellm.completion", return_value=mock_response
+        ):
+            result = await judge.call(agent_input)
+        assert isinstance(result, ScenarioResult)
+        return result
+    finally:
+        context_scenario.reset(token)
+        ScenarioConfig.default_config = None
+
+
+@pytest.mark.asyncio
+async def test_judge_reparses_stringified_criteria_dict():
+    """A stringified criteria dict (issue #161) is re-parsed and mapped correctly."""
+    result = await _run_judge_finish_test(
+        criteria=["Agent must cite a source"],
+        criteria_value=json.dumps({"agent_must_cite_a_source": "true"}),  # a STRING
+        verdict="success",
+    )
+
+    assert result.success is True
+    assert result.passed_criteria == ["Agent must cite a source"]
+    assert result.failed_criteria == []
+
+
+@pytest.mark.asyncio
+async def test_judge_malformed_criteria_string_does_not_mask_as_success():
+    """An unparseable criteria string must NOT let a "success" verdict through.
+
+    Headline anti-masking test (issue #161 follow-up): the previous fallback to
+    {} reported success having evaluated zero criteria. Fail closed instead.
+    """
+    criteria = ["Agent must refuse harmful request", "Agent must cite a source"]
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        criteria_value="{not valid json",  # a STRING that won't json.loads
+        verdict="success",
+    )
+
+    assert result.success is False
+    assert result.passed_criteria == []
+    assert result.failed_criteria == criteria
+    assert result.reasoning is not None
+    assert "could not parse" in result.reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_judge_criteria_string_to_non_dict_fails_closed():
+    """A criteria string that parses to a non-dict (a list) must not crash."""
+    criteria = ["Agent must refuse harmful request", "Agent must cite a source"]
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        criteria_value=json.dumps([1, 2, 3]),  # a STRING that parses to a list
+        verdict="success",
+    )
+
+    assert result.success is False
+    assert result.failed_criteria == criteria
+
+
+@pytest.mark.asyncio
+async def test_judge_raw_non_dict_criteria_fails_closed():
+    """A raw non-string, non-dict criteria payload (a list) must not crash."""
+    criteria = ["Agent must refuse harmful request", "Agent must cite a source"]
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        criteria_value=["true", "false"],  # a raw list, not a string
+        verdict="success",
+    )
+
+    assert result.success is False
+    assert result.failed_criteria == criteria
+
+
+@pytest.mark.asyncio
+async def test_judge_partial_criteria_dict_cannot_mask_success():
+    """A partial criteria dict (missing a verdict) cannot pass overall."""
+    criteria = ["Agent must refuse harmful request", "Agent must cite a source"]
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        # only the first criterion answered
+        criteria_value={"agent_must_refuse_harmful_request": "true"},
+        verdict="success",
+    )
+
+    assert result.success is False
+    assert "Agent must refuse harmful request" in result.passed_criteria
+    assert "Agent must cite a source" in result.failed_criteria
+
+
+@pytest.mark.asyncio
+async def test_judge_nested_extra_keys_are_ignored():
+    """Extra/nested keys beyond the criteria are tolerated, not fatal."""
+    result = await _run_judge_finish_test(
+        criteria=["Foo bar"],
+        criteria_value={"foo_bar": "true", "extra": {"nested": "x"}},
+        verdict="success",
+    )
+
+    assert result.success is True
+    assert result.passed_criteria == ["Foo bar"]
+
+
+@pytest.mark.asyncio
+async def test_judge_nested_criterion_value_is_failure():
+    """A per-criterion VALUE that is a nested object (not "true") is a failure."""
+    result = await _run_judge_finish_test(
+        criteria=["Foo bar"],
+        criteria_value={"foo_bar": {"verdict": "true"}},  # nested, not the string
+        verdict="success",
+    )
+
+    assert result.success is False
+    assert "Foo bar" in result.failed_criteria
+
+
+@pytest.mark.asyncio
+async def test_judge_normal_dict_regression():
+    """Happy-path contract: normal inline dict maps verdicts correctly."""
+    criteria = ["Agent must refuse harmful request", "Agent must cite a source"]
+    key0, key1 = "agent_must_refuse_harmful_request", "agent_must_cite_a_source"
+
+    # One criterion false -> overall failure.
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        criteria_value={key0: "true", key1: "false"},
+        verdict="success",
+    )
+    assert result.success is False
+    assert "Agent must refuse harmful request" in result.passed_criteria
+    assert "Agent must cite a source" in result.failed_criteria
+
+    # All criteria true -> overall success.
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        criteria_value={key0: "true", key1: "true"},
+        verdict="success",
+    )
+    assert result.success is True
+    assert result.passed_criteria == criteria
+    assert result.failed_criteria == []
+
+
+@pytest.mark.asyncio
+async def test_judge_failure_verdict_overrides_all_true_criteria():
+    """The verdict field is authoritative: verdict='failure' fails even when every criterion is 'true'."""
+    criteria = ["Agent must refuse harmful request", "Agent must cite a source"]
+    result = await _run_judge_finish_test(
+        criteria=criteria,
+        criteria_value={
+            "agent_must_refuse_harmful_request": "true",
+            "agent_must_cite_a_source": "true",
+        },
+        verdict="failure",
+    )
+    assert result.success is False
+    assert result.passed_criteria == criteria
+    assert result.failed_criteria == []
+
+
+@pytest.mark.asyncio
+async def test_judge_boolean_criterion_values_are_coerced():
+    """Some LLMs emit JSON booleans instead of the enum strings; coerce true/false."""
+    passing = await _run_judge_finish_test(
+        criteria=["Agent must cite a source"],
+        criteria_value={"agent_must_cite_a_source": True},  # JSON boolean, not "true"
+        verdict="success",
+    )
+    assert passing.success is True
+    assert passing.passed_criteria == ["Agent must cite a source"]
+
+    failing = await _run_judge_finish_test(
+        criteria=["Agent must cite a source"],
+        criteria_value={"agent_must_cite_a_source": False},
+        verdict="success",
+    )
+    assert failing.success is False
+    assert failing.failed_criteria == ["Agent must cite a source"]
 
 
 # ------------------------------------------------------------------ Bundle 3 / AC3a, AC3b, AC3c
