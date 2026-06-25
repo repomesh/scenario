@@ -17,8 +17,14 @@
  *      `lastAgentTranscript`
  *    - `audio` — decoded base64 PCM16 and returned from `receiveAudio`
  *    - `ping` — replied with `{"type": "pong", "event_id": <id>}`
+ *    - `client_tool_call` — tool-only / non-audio terminal turn: resolves the
+ *      drain with an empty `AudioChunk` (issue #648) instead of hanging to the
+ *      `receiveAudio` timeout (no `client_tool_result` path → no follow-up audio)
  *    - `interruption` — swallowed
  *    - Anything else — silently skipped
+ *
+ * A socket close mid-receive is likewise terminal: `onSocketClose` resolves
+ * pending waiters with an empty `AudioChunk` so the drain exits cleanly (#648).
  *
  * {@link ElevenLabsVoiceAgent} — the typed *local* composable preset (distinct
  * responsibility, same vendor): you compose {@link ElevenLabsSTTProvider} + any
@@ -478,6 +484,30 @@ export class ElevenLabsAgentAdapter extends VoiceAgentAdapter {
             `from advertised pcm16/24000 capability; the agent may not understand audio we send.`,
         );
       }
+      return;
+    }
+
+    if (etype === "client_tool_call") {
+      // Issue #648: EL ConvAI emits `client_tool_call` when the agent invokes a
+      // CLIENT-side tool. This adapter has no `client_tool_result` path, so the
+      // agent will never produce spoken audio for this turn — it is a tool-only
+      // / non-audio terminal turn. Resolve the active `receiveAudio` waiter with
+      // an empty chunk so the base drain (`drainAgentResponse`) exits cleanly
+      // instead of hanging to the `receiveAudio` timeout. Mirrors the #646/PR647
+      // reference fix and the Python parity in `elevenlabs.py`.
+      //
+      // If no receive is in flight we DROP the terminal rather than queue it
+      // (unlike the `audio` branch above, which buffers onto `audioQueue`). Safe
+      // because: (1) a terminal carries no payload to preserve, so nothing is
+      // lost; (2) the drain always parks a waiter before the agent acts
+      // (call -> drain -> receiveAudio awaits), so a mid-turn tool call always
+      // finds one. Queuing an empty sentinel would be WORSE — it would surface as
+      // the NEXT turn's first `receiveAudio` result, a spurious empty turn. This
+      // matches the active-waiters-only semantics of onSocketClose / onSocketError
+      // (`drainPendingWaiters`). Python differs only because its pull-loop
+      // `recv_audio` hands the terminal to whichever call asks next.
+      const waiter = this.waiters.shift();
+      if (waiter) waiter(new AudioChunk({ data: new Uint8Array(0) }));
       return;
     }
 
