@@ -32,6 +32,7 @@ import { AgentRole } from "../../domain/agents";
 import { Logger } from "../../utils/logger";
 import { VoiceAgentAdapter } from "../adapter";
 import { AudioChunk } from "../audio-chunk";
+import { createAudioMessage, extractAudio } from "../messages";
 import { AdapterCapabilities } from "../capabilities";
 import { OPENAI_REALTIME_MODEL, OPENAI_STT_MODEL } from "../voice-models";
 
@@ -602,8 +603,24 @@ export class OpenAIRealtimeAgentAdapter extends VoiceAgentAdapter {
    * `super.call()`'s drain and finalized onto `_completedToolCalls`.
    */
   override async call(input: AgentInput): Promise<AgentReturnTypes> {
+    // role=USER → AUTONOMOUS user-simulator drive (#705). The executor's
+    // proceed() loop calls call() with NO scripted text, so we GENERATE and
+    // speak the next customer line (conditioned on the agent's last turn) and
+    // return it as the user's audio turn. We must NEVER fall through to
+    // super.call()/defaultVoiceCall for a user: that path runs
+    // extractIncomingAudio → sendAudio → drainAgentResponse, and with
+    // turn_detection:null + no out-of-band response.create the drain only ever
+    // times out (the prior fail-loud was a deliberate "not yet" around exactly
+    // that gap). The bespoke generate+speak override replaces it. Scripted
+    // `user("...")` turns never reach here — they route through speakUserTurn,
+    // which the executor add+broadcasts without calling call().
+    if (this.role === AgentRole.USER) {
+      return this._autonomousUserTurn(input);
+    }
+
     // Reset per-turn tool-call state so a prior turn's calls don't bleed
-    // through (mirrors the transcript reset in the drain path).
+    // through. The transcript is turn-scoped by defaultVoiceCall (it nulls
+    // `lastAgentTranscript` before the drain), which super.call() runs.
     this._completedToolCalls = [];
     this._toolCallAccumulators = new Map();
 
@@ -678,6 +695,320 @@ export class OpenAIRealtimeAgentAdapter extends VoiceAgentAdapter {
       }),
     );
     this._ws.send(JSON.stringify({ type: "response.create" }));
+  }
+
+  /**
+   * Speak a scripted user line AND drain the spoken audio the realtime model
+   * synthesizes for it — the bridge that lets a realtime USER feed a SEPARATE
+   * agent-under-test (e.g. hosted ElevenLabs) through `scenario.run()` (#705).
+   *
+   * Why NOT `sendText` here: `sendText` adds the line as a `role:"user"`
+   * conversation item and calls a bare `response.create`. Per the OpenAI
+   * Realtime semantics, the model then treats the scripted line as USER input
+   * and GENERATES an assistant reply to it — so a scripted user QUESTION ("what
+   * are your support hours?") comes back ANSWERED ("our hours are 8am–8pm"),
+   * which makes the realtime user sound like the agent and the conversation
+   * incoherent (observed live, #705). For a user SIMULATOR we instead drive a
+   * VERBATIM render: `response.create` with an `instructions` override telling
+   * the model to SPEAK the line as the customer, not answer it. The spoken
+   * audio then arrives as `response.output_audio.delta` frames.
+   *
+   * This method loops `receiveAudio` until the model stops speaking (the
+   * realtime adapter THROWS a timeout once the audio deltas stop — that is the
+   * natural end-of-turn signal, identical to the loop in the adapter-level demo
+   * test), merges the PCM16, and returns ONE {@link AudioChunk} carrying:
+   *  - the merged spoken bytes (the real user audio, recorded by the runtime), and
+   *  - `transcript` = the model's own spoken transcript
+   *    ({@link lastAgentTranscript}, populated from `response.output_audio_transcript.done`),
+   *    falling back to the scripted `text` if the transcript never arrived.
+   *
+   * The transcript is load-bearing for the hosted EL transport: its default
+   * `turnCommitMode:"text"` commits the user turn via a `user_message` event
+   * built from the AudioChunk transcript (it does not ingest raw user audio).
+   * So the realtime user genuinely speaks (audio out) AND the agent-under-test
+   * receives a real, committed turn (transcript in) — realtime → realtime over
+   * the scenario API, no TTS.
+   *
+   * Serial by construction: the turn is fully drained before returning, so the
+   * realtime session never has two concurrent `response.create`s in flight —
+   * sidestepping the active-response race (scenario#657) on the scripted path.
+   *
+   * CONTRACT (realtime user): `user("text")` is best-effort / INTENT, not exact.
+   * The realtime model voices the line naturally and MAY rephrase it (it treats
+   * "say it verbatim" as framing — live #705: the scripted "...account balance"
+   * line came out reworded as "...check my current account balance"). This is
+   * accepted as the speech-native behaviour (realtime over TTS); for EXACT,
+   * word-for-word scripted lines, use a text or TTS user instead, where
+   * `user("text")` is delivered verbatim. See decision
+   * 2026-06-30-realtime-user-into-proceed.md (#38).
+   *
+   * @param text - The scripted user line to voice (best-effort verbatim — the
+   *   model may rephrase; see CONTRACT above).
+   * @param tailTimeoutS - Per-frame idle timeout while draining (seconds). The
+   *   loop ends on the first frame that doesn't arrive within this window.
+   *   Defaults to 15 (matches the demo test's drain window).
+   * @returns The merged spoken-audio chunk (empty `data` if the model produced
+   *   no audio), with `transcript` set as described above.
+   */
+  async speakUserTurn(text: string, tailTimeoutS = 15): Promise<AudioChunk> {
+    // Reset BOTH per-turn transcript fields so the `?? text` fallback below
+    // can't read a stale prior-turn transcript: `lastAgentTranscript` is only
+    // written on `response.output_audio_transcript.done`, and `_agentTranscriptBuf`
+    // (its delta accumulator + fallback source) is only zeroed when a `.done`
+    // lands — a turn whose `.done` never arrives would otherwise leave its
+    // deltas to bleed into the next turn.
+    this.lastAgentTranscript = null;
+    this._agentTranscriptBuf = "";
+    this._speakVerbatim(text);
+    // Drain the spoken audio via the shared loop; fall back to the scripted
+    // `text` when the model emits no transcript so the downstream turn-commit
+    // always has something to send.
+    return this._drainSpokenTurn(tailTimeoutS, text);
+  }
+
+  /**
+   * Drain ONE spoken turn the model is producing: loop {@link receiveAudio}
+   * until the audio deltas stop (the adapter throws a per-frame idle timeout —
+   * the natural end-of-turn — or a zero-length chunk arrives), merge the PCM16,
+   * and return ONE {@link AudioChunk}. Shared by the SCRIPTED verbatim path
+   * ({@link speakUserTurn}) and the AUTONOMOUS generative path
+   * ({@link speakGeneratedUserTurn}) so end-of-turn detection + PCM merge can
+   * never drift between them.
+   *
+   * `transcript` resolves to the model's own spoken transcript
+   * ({@link lastAgentTranscript}, from `response.output_audio_transcript.done`),
+   * falling back to `fallbackTranscript` when the model emitted audio but no
+   * transcript event — the verbatim path passes the scripted text, the
+   * generative path passes `undefined` (audio-presence is the gate, Risk R7).
+   *
+   * Serial by construction: the caller has already issued exactly ONE
+   * `response.create`, so only one response is ever in flight while draining.
+   *
+   * @param tailTimeoutS - Per-frame idle timeout while draining (seconds).
+   * @param fallbackTranscript - Transcript to use if none arrived on the wire.
+   */
+  private async _drainSpokenTurn(
+    tailTimeoutS: number,
+    fallbackTranscript?: string,
+  ): Promise<AudioChunk> {
+    const chunks: Uint8Array[] = [];
+    // Bounded so a misbehaving stream can't loop forever; 400 frames at the
+    // typical ~tens-of-ms cadence is many seconds of speech — far beyond a
+    // one-sentence user line, while still finite.
+    for (let i = 0; i < 400; i++) {
+      let chunk: AudioChunk;
+      try {
+        chunk = await this.receiveAudio(tailTimeoutS);
+      } catch {
+        break; // timeout / socket close = end of the model's spoken turn
+      }
+      if (chunk.data.length === 0) break;
+      chunks.push(chunk.data);
+    }
+
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      merged.set(c, off);
+      off += c.length;
+    }
+    const transcript = this.lastAgentTranscript ?? fallbackTranscript;
+    return new AudioChunk({ data: merged, transcript });
+  }
+
+  /**
+   * Drive a VERBATIM spoken render of `text` as the user/customer — ONE
+   * out-of-band `response.create` that voices the exact line and is fully
+   * isolated from the session's conversation history.
+   *
+   * Three response fields make this deterministic (OpenAI Realtime
+   * `response.create.response.*`):
+   *  - `conversation: "none"` — out-of-band: the response is NOT appended to the
+   *    default conversation AND prior context is bypassed.
+   *  - `input: []` — explicitly removes ALL prior context for this generation.
+   *  - `output_modalities: ["audio"]` — force a spoken (audio) response.
+   *
+   * Why isolation matters (#705, observed live): without it, each prior
+   * verbatim response stays in session history as the model's own assistant
+   * turn, so by ~turn 3 the model "continues the conversation" and ANSWERS the
+   * scripted line instead of speaking it (the realtime user starts sounding like
+   * the agent). `conversation:"none"` + `input:[]` removes that history entirely,
+   * so every turn is rendered the same way — the line, spoken, nothing else.
+   *
+   * Persona anchor (#705): that same isolation strips the persona set via
+   * `session.update`, and a per-response `instructions` OVERRIDES the session
+   * default regardless, so the persona ({@link instructions}) is PREPENDED to the
+   * per-response `instructions`. Without it the model has no domain anchor and
+   * renders a wrong opener (live: "trouble with my internet connection" instead of
+   * the scripted account-balance line), which then mis-sets the domain for every
+   * following proceed() turn.
+   *
+   * Verbatim via `instructions` (not a `role:"user"` conversation item) because
+   * a user item makes the model GENERATE a reply to the line rather than voice
+   * it (see {@link speakUserTurn} jsdoc).
+   */
+  private _speakVerbatim(text: string): void {
+    if (!this._ws) {
+      throw new Error("OpenAIRealtimeAgentAdapter: not connected");
+    }
+    this._ws.send(
+      JSON.stringify({
+        type: "response.create",
+        response: {
+          conversation: "none",
+          input: [],
+          output_modalities: ["audio"],
+          instructions:
+            // Per-response `instructions` OVERRIDE the session default, and
+            // `conversation:"none"` + `input:[]` strip all session context, so
+            // the persona set via session.update is gone here unless re-injected.
+            // Without it the model has no domain anchor and renders a WRONG opener
+            // (#705, live: "trouble with my internet connection" instead of the
+            // scripted account line). Prepend the persona, guarded for empty.
+            (this.instructions ? this.instructions + "\n\n" : "") +
+            "You are voicing ONE line spoken by a customer in a support call. " +
+            "Say the line below OUT LOUD, in the first person, EXACTLY as written. " +
+            "Do NOT answer it, do NOT respond to it, do NOT add or change any " +
+            `words — just speak this line and nothing else: ${text}`,
+        },
+      }),
+    );
+  }
+
+  // -------------------------------------------------- autonomous user (#705)
+
+  /**
+   * AUTONOMOUS user turn (#705) — the `proceed()`/generated drive for a realtime
+   * USER, the autonomous sibling of the scripted {@link speakUserTurn} path.
+   *
+   * Bridge-faithful (fork B, audio-context): the realtime model HEARS the
+   * agent-under-test's last turn — its audio is fed into the input buffer and
+   * committed in-context — then SPEAKS the next customer line in reply, returned
+   * as the user's audio turn (recorded + broadcast back to the AUT). Mirrors the
+   * proven realtime↔realtime bridge pattern, minus the transport plumbing the
+   * executor + EL adapter already own (single-flight, turn-boundary close,
+   * idle-gap) — so this is just the drive logic.
+   *
+   * Returns ONE `role:"user"` audio {@link createAudioMessage}. Audio-presence,
+   * NOT transcript-presence, is the contract (R7): even when no transcript
+   * arrives, the AUT still hears the spoken audio.
+   */
+  private async _autonomousUserTurn(
+    input: AgentInput,
+  ): Promise<AgentReturnTypes> {
+    if (!this._ws) {
+      throw new Error("OpenAIRealtimeAgentAdapter: not connected");
+    }
+    // (1) HEAR the agent: feed the AUT's last-turn audio into the input buffer.
+    // `_speakGeneratedTurn` commits it so the model has it in-context for this
+    // generation. No heard audio (e.g. the very first user turn) still produces
+    // a generated turn from the persona alone.
+    const heard = this._extractHeardAudio(input);
+    if (heard) {
+      await this.sendAudio(heard);
+    }
+    // (2) GENERATE + speak the next customer line, conditioned on what was heard.
+    const chunk = await this.speakGeneratedUserTurn();
+    // (3) Return as the USER's audio turn.
+    return createAudioMessage(chunk, "user");
+  }
+
+  /**
+   * Pull the agent's last-turn audio from the incoming messages, dropping a
+   * malformed (odd-byte, non-PCM16) payload rather than throwing — parity with
+   * the runtime's `extractIncomingAudio`, so a bad frame degrades the turn to
+   * persona-only generation instead of crashing it.
+   */
+  private _extractHeardAudio(input: AgentInput): AudioChunk | null {
+    const msgs = input.newMessages;
+    if (!msgs || msgs.length === 0) return null;
+    try {
+      return extractAudio(msgs[msgs.length - 1]);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Speak the next customer line GENERATIVELY and drain it — the autonomous
+   * sibling of {@link speakUserTurn}. Issues exactly ONE in-context
+   * `response.create` (fork B: the committed heard audio + the customer
+   * persona/nudge), then runs the SHARED {@link _drainSpokenTurn} loop. Returns
+   * ONE {@link AudioChunk} (merged PCM + the model's spoken transcript, or no
+   * transcript — audio-presence is the gate, R7).
+   *
+   * Cross-turn cleanliness (the commit `7d0d02d`-class bug): two pieces of
+   * per-turn state must reset so turn N never bleeds into turn N+1 —
+   *  1. {@link lastAgentTranscript} is reset to `null` HERE, so turn N+1's drain
+   *     can never fall back to turn N's transcript; and
+   *  2. the heard-audio append buffer (`_pendingAudioBytes` + the server-side
+   *     input buffer) is committed + zeroed inside {@link _speakGeneratedTurn},
+   *     so turn N+1 never carries turn N's bytes into its `response.create`.
+   */
+  private async speakGeneratedUserTurn(tailTimeoutS = 15): Promise<AudioChunk> {
+    // RESET (transcript bleed): both lastAgentTranscript (written only on
+    // `response.output_audio_transcript.done`) and _agentTranscriptBuf (its
+    // delta accumulator, zeroed only when a `.done` lands) must clear at turn
+    // start, so a turn that emits audio but NO `.done` event cannot return the
+    // PREVIOUS turn's line.
+    this.lastAgentTranscript = null;
+    this._agentTranscriptBuf = "";
+    this._speakGeneratedTurn();
+    // No scripted text to fall back to → `undefined` transcript when the model
+    // emits none (R7); the AUT still hears the audio.
+    return this._drainSpokenTurn(tailTimeoutS);
+  }
+
+  /**
+   * Drive ONE GENERATIVE spoken turn as the customer — a single
+   * `response.create` that, UNLIKE {@link _speakVerbatim}, is IN-CONTEXT (fork
+   * B): it sets NEITHER `conversation:"none"` NOR `input:[]`, so the committed
+   * heard audio + the conversation so far condition the reply. The customer
+   * persona/goal ({@link instructions}) is PREPENDED to the per-response
+   * `instructions` here: a per-response `instructions` OVERRIDES the session
+   * default, so relying on the session persona alone drops it every proceed()
+   * turn (#705). The per-turn nudge then keeps the model in the customer role
+   * (not answering as the agent).
+   * `output_modalities:["audio"]` forces a spoken reply.
+   *
+   * RESET #2 (heard-audio buffer bleed): if heard audio was appended this turn,
+   * commit it now and ZERO `_pendingAudioBytes` so (a) the drain loop's
+   * `receiveAudio` does NOT auto-commit + fire a SECOND, bare `response.create`
+   * (it only does so while `_pendingAudioBytes > 0`), and (b) the next turn's
+   * append starts from an empty server-side buffer — turn N+1 never carries turn
+   * N's bytes.
+   */
+  private _speakGeneratedTurn(): void {
+    if (!this._ws) {
+      throw new Error("OpenAIRealtimeAgentAdapter: not connected");
+    }
+    if (this._pendingAudioBytes > 0) {
+      this._ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      this._pendingAudioBytes = 0;
+    }
+    this._ws.send(
+      JSON.stringify({
+        type: "response.create",
+        response: {
+          output_modalities: ["audio"],
+          instructions:
+            // Per-response `instructions` OVERRIDE the session default (it applies
+            // only "if this field is not set"), so the persona set via
+            // session.update is dropped on EVERY proceed() turn unless re-injected
+            // here. Prepend it so the customer goal/domain holds across the whole
+            // generated conversation (#705). Guarded for an empty persona.
+            (this.instructions ? this.instructions + "\n\n" : "") +
+            "You are the CUSTOMER on a support call — never the agent. Listen " +
+            "to what the agent just said, then say your NEXT line: one short, " +
+            "natural, first-person sentence that moves your own request forward " +
+            "(ask your next question, or answer what the agent just asked). Stay " +
+            "in character as the customer; do NOT answer as the agent, do NOT " +
+            "repeat or echo the agent's words, do NOT offer to help. Speak only " +
+            "your next line.",
+        },
+      }),
+    );
   }
 
   // ----------------------------------------------------------------- inner

@@ -19,16 +19,65 @@
 import type { ModelMessage } from "ai";
 
 /**
- * A user-sim agent that can directly send text to the realtime transport
- * without a TTS conversion step. Implemented by OpenAI Realtime user sims
- * that operate in text mode over the websocket.
+ * Error message for the executor's adapter-AGNOSTIC fail-closed invariant: a
+ * USER turn produced for a voice agent under test MUST carry audio (issue #705).
+ *
+ * Why this exists (and replaced the old realtime-user type-check): a voice agent
+ * only "hears" a turn that carries audio — its `call()` extracts audio from the
+ * incoming message (`extractIncomingAudio`). A text-only user turn never commits
+ * on the agent's transport, so the next agent turn has nothing to answer and its
+ * `receiveAudio` times out (the #705 symptom). Rather than silently degrade the
+ * user side to text, {@link ScenarioExecution.voiceifyGeneratedUserTurn} asserts
+ * audio-presence on the FINAL (post-voiceify) user turn and throws this when it
+ * is missing.
+ *
+ * This is strictly stronger than the prior `isRealtimeUserAgent` type-check it
+ * replaced: it catches ANY producer that yields a no-audio user turn against a
+ * voice agent — a realtime adapter that returns text, OR a non-realtime/
+ * non-voice-sim producer the old check let through silently — not just one class.
+ * The autonomous OpenAI Realtime user (`role=USER`) now PASSES it: its `call()`
+ * speaks a generative turn and returns audio. Defined once here so every site
+ * that references the invariant can never drift.
+ */
+export const USER_TURN_NO_AUDIO_FOR_VOICE_AUT =
+  "A user turn produced for a VOICE agent under test carried no audio. A voice " +
+  'agent only "hears" a turn that carries audio (its call() extracts audio from ' +
+  "the incoming message); a text-only user turn never commits, so the next agent " +
+  "turn has nothing to answer and times out. Ensure the user side voices its " +
+  "turn — a voice user simulator (userSimulatorAgent with a voice) TTS's its " +
+  "generated text to audio, and a realtime user (OpenAI Realtime, role=USER) " +
+  "speaks it natively. This fail-closed check prevents silently degrading the " +
+  "user side to text.";
+
+/**
+ * A user-sim agent that speaks scripted text into a realtime transport — the
+ * realtime model synthesizes the voice itself, with NO TTS conversion step.
+ * Implemented by the OpenAI Realtime adapter when `role=USER`.
  */
 export interface RealtimeUserAgent {
   /**
-   * Send a text turn directly to the realtime transport.
-   * The adapter is responsible for any protocol framing.
+   * Inject a text turn into the realtime session and kick off the response
+   * (`conversation.item.create` + `response.create`). Fire-and-forget — the
+   * spoken audio arrives on the adapter's own `receiveAudio` stream.
    */
   sendText(text: string): Promise<void>;
+
+  /**
+   * Speak a scripted line AND drain the resulting spoken audio, returning it as
+   * one audio chunk (PCM16 bytes + the model's spoken transcript). This is the
+   * bridge the executor uses to feed a realtime USER's voice into a SEPARATE
+   * agent-under-test (e.g. hosted ElevenLabs) through `scenario.run()` (#705):
+   * the chunk's audio is recorded as the real user turn, and its transcript
+   * drives the agent-under-test's turn-commit.
+   *
+   * The returned chunk carries `transcript` = the model's own spoken transcript
+   * (fallback: the scripted text). The adapter owns all protocol framing and
+   * end-of-turn detection.
+   */
+  speakUserTurn(text: string): Promise<{
+    readonly data: Uint8Array;
+    readonly transcript?: string;
+  }>;
 }
 
 /**
@@ -76,12 +125,18 @@ export type UserSimulatorAgentWithVoice = {
 /**
  * Returns `true` when `agent` structurally satisfies {@link RealtimeUserAgent}.
  *
- * Checks that `sendText` is a function — sufficient for the executor to
- * safely call `agent.sendText(content)` without a full-class cast.
+ * Requires BOTH `sendText` and `speakUserTurn` — the executor's #705 bridge
+ * routes scripted user turns through `speakUserTurn` (speak + drain spoken
+ * audio), so a shape without it is not a realtime user for routing purposes.
  */
 export function isRealtimeUserAgent(agent: unknown): agent is RealtimeUserAgent {
+  const candidate = agent as {
+    sendText?: unknown;
+    speakUserTurn?: unknown;
+  };
   return (
-    typeof (agent as { sendText?: unknown }).sendText === "function"
+    typeof candidate.sendText === "function" &&
+    typeof candidate.speakUserTurn === "function"
   );
 }
 
