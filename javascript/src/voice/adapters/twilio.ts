@@ -18,7 +18,6 @@
  * codec live in `./twilio-shared.ts`.
  */
 
-
 import { AgentRole } from "../../domain/agents";
 import { VoiceAgentAdapter } from "../adapter";
 import { AudioChunk } from "../audio-chunk";
@@ -112,6 +111,16 @@ export class TwilioAgentAdapter extends VoiceAgentAdapter {
   private _streamConnected = makeDeferred<void>();
   private _inboundQueue: InboundQueue = new InboundQueue();
   private _connected = false;
+  // Set true by the media-stream loop's terminal path (stop / socket close /
+  // throw) the moment it enqueues the end-of-call sentinel. Once the call has
+  // ended, receiveAudio must keep draining the queue (and hand back the
+  // sentinel) WITHOUT re-asserting transport liveness — `_handleStreamSocket`
+  // nulls `_streamWs`/`_streamSid` synchronously right after the loop returns,
+  // so the drain's second receiveAudio would otherwise hit `_assertStreamLive`
+  // and throw "no live media stream" (#695). Reset on connect(), disconnect(),
+  // and at media-stream-loop entry (per-call scope — a second session on the
+  // same connected adapter must not inherit the previous session's flag).
+  private _streamEnded = false;
 
   constructor(options: TwilioAgentAdapterOptions) {
     super();
@@ -152,6 +161,7 @@ export class TwilioAgentAdapter extends VoiceAgentAdapter {
     this._mode = "idle";
     this._streamConnected = makeDeferred<void>();
     this._inboundQueue.reset();
+    this._streamEnded = false;
 
     this._webhookServer = new TwilioWebhookServer(this);
     await this._webhookServer.start();
@@ -201,6 +211,7 @@ export class TwilioAgentAdapter extends VoiceAgentAdapter {
     this._streamWs = null;
     this._streamConnected = makeDeferred<void>();
     this._inboundQueue.reset();
+    this._streamEnded = false;
   }
 
   // ------------------------------------------------------------------ direction
@@ -297,6 +308,30 @@ export class TwilioAgentAdapter extends VoiceAgentAdapter {
   }
 
   override async receiveAudio(timeout: number): Promise<AudioChunk> {
+    // Once the media-stream loop has ended (stop / socket close / throw),
+    // `_handleStreamSocket` nulls `_streamWs`/`_streamSid` synchronously right
+    // after the loop returns. The drain loop (`drainAgentResponse`) always makes
+    // a *second* receiveAudio call after the first chunk — by then liveness has
+    // flipped. So the liveness assert only guards the genuinely-live-and-idle
+    // case; buffered audio and the end-of-call drain bypass it (#695).
+    //
+    // Two sentinel sources cooperate here, and BOTH are load-bearing: the
+    // loop's `finally` ENQUEUES one empty chunk — that is what wakes a consumer
+    // already blocked in `take()` at the moment the call ends (flipping
+    // `_streamEnded` alone wakes nobody) — and this method SYNTHESIZES further
+    // empty chunks for every call after the queue has drained (the tail-silence
+    // probe, or any caller that keeps polling). Delete either and a hang comes
+    // back.
+    if (!this._inboundQueue.isEmpty()) {
+      // Buffered audio or the loop-enqueued terminal sentinel — drain it,
+      // live or not.
+      return this._inboundQueue.take(timeout * 1000);
+    }
+    if (this._streamEnded) {
+      // Call ended and fully drained: synthesize another empty sentinel.
+      return new AudioChunk({ data: new Uint8Array(0) });
+    }
+    // Live call, nothing buffered yet: assert liveness, then wait.
     this._assertStreamLive();
     return this._inboundQueue.take(timeout * 1000);
   }
@@ -346,6 +381,21 @@ export class TwilioAgentAdapter extends VoiceAgentAdapter {
   }
 
   /**
+   * Test seam: drive the FULL production per-connection wrapper
+   * ({@link TwilioWebhookServer.runStreamSession}) over a provided socket — the
+   * loop PLUS the `finally` that nulls `_streamWs`/`_streamSid`, exactly as the
+   * real `/twilio/stream` handler does after a call ends. Unlike
+   * {@link _driveMediaStream} (loop only), this reproduces the #695 teardown
+   * race so a follow-up `receiveAudio` runs against nulled transport state.
+   */
+  async _driveStreamSession(ws: MediaStreamWebSocket): Promise<void> {
+    if (!this._webhookServer) {
+      throw new Error("TwilioAgentAdapter: not connected; cannot drive stream.");
+    }
+    await this._webhookServer.runStreamSession(ws);
+  }
+
+  /**
    * Called by the server when an inbound webhook is rejected (caller filter
    * or bad signature). Exposed for tests; production callers see the HTTP
    * response and never look at this counter.
@@ -368,6 +418,38 @@ export class TwilioAgentAdapter extends VoiceAgentAdapter {
   }
   /** @internal */ _enqueueInbound(chunk: AudioChunk): void {
     this._inboundQueue.put(chunk);
+  }
+  /** @internal */ _markStreamEnded(): void {
+    this._streamEnded = true;
+  }
+  /**
+   * @internal Re-arm per-CALL state at media-stream-loop entry. Both halves are
+   * per-call, not per-connection, so a second session on the same connected
+   * adapter must not inherit either of them.
+   *
+   * The flag alone is not enough: the previous call's `finally` ENQUEUED a
+   * terminal sentinel, and if that call ended while no drain was running (the
+   * caller hung up between turns) the sentinel is still buffered. `receiveAudio`
+   * drains a non-empty queue without checking liveness, so the new call's first
+   * `receiveAudio` would hand that stale empty chunk to `drainAgentResponse` as
+   * its first chunk — and the drain breaks on an empty chunk, truncating the new
+   * call's first agent turn to silence.
+   *
+   * No frame of this call has been enqueued yet, so buffered chunks are the
+   * previous session's residue. `clearBuffered` (not `reset`) so a consumer
+   * already parked in `take()` stays parked for the new call's real audio.
+   */
+  _resetCallState(): void {
+    this._streamEnded = false;
+    this._inboundQueue.clearBuffered();
+  }
+  /** @internal Test-only view of the transport state the server nulls on teardown. */
+  get _streamWsForTest(): MediaStreamWebSocket | null {
+    return this._streamWs;
+  }
+  /** @internal Test-only view of the transport state the server nulls on teardown. */
+  get _streamSidForTest(): string | undefined {
+    return this._streamSid;
   }
   /** @internal */ _onWebhookRejected(): void {
     this.rejectedCount += 1;
@@ -446,6 +528,21 @@ class InboundQueue {
     reject: (err: Error) => void;
     timer: NodeJS.Timeout;
   }> = [];
+
+  /** True when no buffered chunk is immediately available to `take()`. */
+  isEmpty(): boolean {
+    return this._items.length === 0;
+  }
+
+  /**
+   * Drop buffered chunks but leave parked waiters alone — unlike {@link reset},
+   * which also rejects them. Used at media-stream-loop entry to clear the
+   * previous call's residue without failing a consumer already waiting on the
+   * new call's audio.
+   */
+  clearBuffered(): void {
+    this._items = [];
+  }
 
   reset(): void {
     this._items = [];
